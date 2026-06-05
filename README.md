@@ -536,9 +536,9 @@ gantt
       Tabular Baseline (Phase 1)   :done,    des5, 2026-05-22, 5d
       PyTorch Dataloader (Phase 2) :done,    des6, 2026-05-27, 3d
       3D PointNet Regressor (Ph 3) :done,    des7, 2026-05-30, 4d
-      Phase 4 Step 1: PointNet-VAE  :done,    des8, 2026-06-03, 2d
-      Phase 4 Step 2: Triplane VAE  :done,    des9, 2026-06-05, 2d
-      Phase 5: Latent Optimization :active,  des10, 2026-06-05, 7d
+      Phase 4 Step 1 - PointNet-VAE:done,    des8, 2026-06-03, 2d
+      Phase 4 Step 2 - Triplane VAE:done,    des9, 2026-06-05, 2d
+      Phase 5 - Latent Optimization:active,  des10, 2026-06-05, 7d
 ```
 
 ## File and Naming Conventions
