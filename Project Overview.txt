@@ -1,0 +1,7 @@
+Project 1 – AI-Driven Aerodynamic Optimization 
+Project Generative Design for Low-Drag Car Bodies 
+● Goal Use AI (physics-informed generative models) to suggest car body shape 
+modifications that improve aerodynamic efficiency (lower drag coefficient). 
+● Novelty Integrate CFD simulations with AI models to iteratively refine designs that 
+could become an in-house aero design assistant for EV startups. 
+● Tech Python, OpenFOAM (CFD), PyTorch, NVIDIA Modulus (physics-informed AI). 

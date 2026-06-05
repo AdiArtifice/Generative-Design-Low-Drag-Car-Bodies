@@ -1,0 +1,9 @@
+numpy
+pandas
+trimesh
+torch
+torchvision
+matplotlib
+scikit-learn
+rtree
+python-dotenv

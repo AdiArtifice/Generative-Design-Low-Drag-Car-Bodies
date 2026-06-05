@@ -1,0 +1,29 @@
+# Python/Pytest
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
+
+# Environment files
+.env
+
+# Large Datasets
+raw_stl/
+normalized/
+pointclouds/
+occupancy/
+
+# Model Weights and Checkpoints
+models/*.pth
+models/*.pt
+
+# Generated STL Reconstructions
+reconstructed_car*.stl
+reconstructed_test*.stl
+
+# Logs and temporary files
+camber-logs/
+*.log
