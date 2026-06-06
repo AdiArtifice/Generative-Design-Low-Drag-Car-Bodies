@@ -33,6 +33,12 @@ def parse_args():
         help="Path to the master metadata CSV (default: metadata/metadata.csv)"
     )
     parser.add_argument(
+        "--input",
+        type=str,
+        default=None,
+        help="Directory containing normalized STL files to process (if provided, bypasses metadata.csv)"
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default="occupancy",
@@ -139,49 +145,86 @@ def main():
         print(f"Limit processing  : First {args.limit} meshes")
     print("-" * 60)
     
-    if not metadata_path.exists():
-        print(f"[Error] Metadata file '{metadata_path}' does not exist.")
-        sys.exit(1)
-        
-    # Read metadata CSV
-    df = pd.read_csv(metadata_path)
-    
-    if args.limit:
-        df = df.head(args.limit)
-        
-    total_files = len(df)
-    print(f"Processing {total_files} meshes from metadata...")
-    
-    successful_count = 0
-    for idx, row in df.iterrows():
-        mesh_rel_path = row["normalized_stl_path"]
-        mesh_path = Path(mesh_rel_path)
-        
-        if not mesh_path.exists():
-            print(f"[{idx+1}/{total_files}] [Error] File not found: {mesh_path}")
-            continue
+    if args.input:
+        input_root = Path(args.input)
+        if not input_root.exists():
+            print(f"[Error] Input directory '{input_root}' does not exist.")
+            sys.exit(1)
             
-        # Structure the output file path to match relative structure under occupancy/
-        # e.g., normalized/fastback_smooth_wheelcovers/F_S_WWC_WM_001_norm.stl
-        # -> occupancy/fastback_smooth_wheelcovers/F_S_WWC_WM_001_norm_occ.npz
-        rel_to_norm = mesh_path.relative_to("normalized")
-        output_file_path = output_root / rel_to_norm.parent / f"{rel_to_norm.stem}_occ.npz"
-        
-        print(f"[{idx+1}/{total_files}] Processing {mesh_path.name} -> {output_file_path.name}...", end="", flush=True)
-        success = process_mesh_occupancy(
-            mesh_path=mesh_path,
-            output_path=output_file_path,
-            num_points=args.num_points,
-            sigma=args.sigma
-        )
-        
-        if success:
-            successful_count += 1
-            print(" Done.", flush=True)
+        mesh_paths_all = list(input_root.glob("**/*.stl"))
+        if args.limit:
+            mesh_paths_all = mesh_paths_all[:args.limit]
             
-        # Collect garbage to keep RAM clean
-        if idx % 10 == 0:
-            gc.collect()
+        total_files = len(mesh_paths_all)
+        print(f"Processing {total_files} meshes from input directory...")
+        
+        successful_count = 0
+        for idx, mesh_path in enumerate(mesh_paths_all):
+            # Same relative logic, but assuming input_root is something like normalized/F_S_WWC_WM
+            try:
+                rel_to_norm = mesh_path.relative_to(input_root.parent)
+            except ValueError:
+                rel_to_norm = Path(mesh_path.name)
+            
+            output_file_path = output_root / rel_to_norm.parent / f"{mesh_path.stem}_occ.npz"
+            
+            print(f"[{idx+1}/{total_files}] Processing {mesh_path.name} -> {output_file_path.name}...", end="", flush=True)
+            success = process_mesh_occupancy(
+                mesh_path=mesh_path,
+                output_path=output_file_path,
+                num_points=args.num_points,
+                sigma=args.sigma
+            )
+            
+            if success:
+                successful_count += 1
+                print(" Done.", flush=True)
+                
+            if idx % 10 == 0:
+                gc.collect()
+
+    else:
+        if not metadata_path.exists():
+            print(f"[Error] Metadata file '{metadata_path}' does not exist.")
+            sys.exit(1)
+            
+        # Read metadata CSV
+        df = pd.read_csv(metadata_path)
+        
+        if args.limit:
+            df = df.head(args.limit)
+            
+        total_files = len(df)
+        print(f"Processing {total_files} meshes from metadata...")
+        
+        successful_count = 0
+        for idx, row in df.iterrows():
+            mesh_rel_path = row["normalized_stl_path"]
+            mesh_path = Path(mesh_rel_path)
+            
+            if not mesh_path.exists():
+                print(f"[{idx+1}/{total_files}] [Error] File not found: {mesh_path}")
+                continue
+                
+            # Structure the output file path to match relative structure under occupancy/
+            rel_to_norm = mesh_path.relative_to("normalized")
+            output_file_path = output_root / rel_to_norm.parent / f"{rel_to_norm.stem}_occ.npz"
+            
+            print(f"[{idx+1}/{total_files}] Processing {mesh_path.name} -> {output_file_path.name}...", end="", flush=True)
+            success = process_mesh_occupancy(
+                mesh_path=mesh_path,
+                output_path=output_file_path,
+                num_points=args.num_points,
+                sigma=args.sigma
+            )
+            
+            if success:
+                successful_count += 1
+                print(" Done.", flush=True)
+                
+            # Collect garbage to keep RAM clean
+            if idx % 10 == 0:
+                gc.collect()
             
     print("-" * 60)
     print("Occupancy Preprocessing Completed!")
@@ -191,3 +234,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
