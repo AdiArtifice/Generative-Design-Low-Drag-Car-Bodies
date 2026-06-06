@@ -1,6 +1,6 @@
 # Executive Summary
 
-This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** with associated drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, and **metadata integration**. Initial work uses a small **subset (100 STL meshes)** of the full DrivAerNet++-style dataset (≈300 GB) focusing on the `F_S_WWC_WM` configuration (Fastback, Smooth underbody, Wheel Covers, Wheel Meshes). This subset spans the full drag range with balanced low- and high-drag samples. The README below outlines the project overview, goals, dataset details, environment setup, preprocessing steps, and baseline modeling recipes. It is structured for clarity with headings, tables, code snippets, and mermaid diagrams to guide development and automation.
+This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** with associated drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, **occupancy grid preprocessing**, and **metadata integration**. We scaled our implementation from the initial **100-car local sandbox** to the **full 692-car configuration subset (`F_S_WWC_WM`)** of the DrivAerNet++-style dataset on the Camber Cloud. The **Triplane VAE** has been successfully trained for 80 epochs on a Camber GPU, learning a robust 3D shape latent space. The README below outlines the project overview, goals, dataset details, environment setup, preprocessing steps, and modeling recipes. It is structured for clarity to guide development and automation.
 
 ## Table of Contents
 
@@ -63,21 +63,21 @@ We focus on the **F_S_WWC_WM** (Fastback, Smooth, Wheel Covers, Wheel Mesh) vari
 
 This subset is **representative** of low-drag EV designs.
 
-## Selected Subset Strategy
+## Local Subset vs. Cloud Scale Strategy
 
-Processing the full dataset locally (300 GB) is impractical. Instead, we use:
+To manage local hardware constraints and optimize development speed, we adopted a staged scaling strategy:
 
-- **100 carefully chosen meshes** from the F_S_WWC_WM config.
-- **Balanced drag distribution:** Samples selected so low-drag and high-drag designs are both included (e.g., stratified sampling on Cd).
-- **Geometric diversity:** Include different shapes (even within fastbacks) to avoid uniformity.
-
-> **Note:** Selection used drag-value stratification and bin sampling to capture full range of aerodynamic performance.
+- **Local Sandbox (100 Cars):** Prototyped the inspection, normalization, point-cloud sampling, and baseline model architectures (PointNet and PointNet-VAE) using a balanced, stratified 100-car subset of the `F_S_WWC_WM` configuration.
+- **Camber Cloud Scale (692 Cars):** Once the architectures were validated locally, we migrated the pipeline to the Camber Cloud to process the **entire 692-car configuration subset** of `F_S_WWC_WM`.
+- **CFD Ingestion:** Fused continuous CAD shape parameters and drag results (`Average Cd`, `drag_area`) directly from the master `DrivAerNet_ParametricData (2).xlsx` sheet.
+- **Storage Optimization:** Preprocessed raw watertight STLs into highly compressed occupancy grids (`.npz` format) and `.ply` point clouds, then purged the 48 GB STL raw files to keep Stash storage utilization extremely efficient (<3% of quota).
 
 ```text
-Subset Stats:
-- Samples: 100 STL files (fastback, smooth, wheelcovers, wheel mesh)
-- Cd range: [min, max] covering full dataset span
-- Balanced: ~equal low vs high Cd designs
+Dataset Split Stats (692 Cars total):
+- Train Set: 553 cars (80%)
+- Val Set: 69 cars (10%)
+- Test Set: 70 cars (10%)
+- Inputs: 50,000 PLY Point Cloud points, 2,048 raycast query points (for VAE)
 ```
 
 ## Working Configuration (F_S_WWC_WM)
@@ -495,15 +495,31 @@ We implemented a three-phase "Baseline-First" modeling strategy to prove the val
   - **PointNet Regressor:** Test $R^2 = 0.563$ (target: `drag_area`).
   - **Key Finding:** PointNet immediately matched the tabular baseline's performance ceiling with minimal training and points. This proves its spatial capacity to understand 3D car shapes directly.
 
+### Phase 4: Triplane VAE Generative Model
+- **Goal:** Learn a continuous 3D vehicle latent representation that allows reconstructing watertight car bodies and performing gradient descent optimization.
+- **Model:** [models.py](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/src/models/models.py) (implements Triplane encoder, 3D CNN, and MLP occupancy decoder).
+- **Training Script:** [train_triplane.py](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/scripts/train_triplane.py) (cloud job script: [train_vae_cloud.sh](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/scripts/train_vae_cloud.sh))
+- **Architecture Details:**
+  - Orthogonal 2D projection planes (XY, YZ, XZ) representation mapping point cloud structures into feature grids of size `[PlaneChannels, PlaneRes, PlaneRes]`.
+  - Triplane Encoder utilizes shared MLP structures to project 3D points to the 2D planes.
+  - Convolutional layers process the planes and compress them into a 256-D latent vector $z$.
+  - Decoder reads query points $(x,y,z)$ and decodes the boundary occupancy state (inside/outside vehicle body).
+- **Results (80 Epochs, GPU):**
+  - **Train Loss:** 0.2967 (Recon BCE: 0.2851, KL Div: 2.3216)
+  - **Val Loss:** 0.2995 (Recon BCE: 0.2882, KL Div: 2.2451)
+  - **Occupancy Reconstruction Accuracy:** **85.79% (Train) / 85.49% (Val)**
+  - **Key Finding:** Low KL-divergence indicates a smooth, highly interpolatable latent space. Excellent agreement between train and validation losses demonstrates a highly generalized latent model.
+
 ---
 
-### Comparison of Predictive Performance (Target: `drag_area`)
+### Comparison of Performance (Surrogates & Generative Kernels)
 
-| Model Pipeline | Input Features | Test $R^2$ Score |
-| :--- | :--- | :---: |
-| **Random Forest** | 29 Tabular Parameters | 0.4924 |
-| **Gradient Boosting** | 29 Tabular Parameters | 0.5751 |
-| **3D PointNet** | Raw 3D Point Cloud (2,048 points) | **0.5633** |
+| Model Pipeline | Model Type | Input Features | Test / Val Score |
+| :--- | :--- | :--- | :---: |
+| **Random Forest** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.4924$ |
+| **Gradient Boosting** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.5751$ |
+| **3D PointNet** | Regressor | Raw 3D Point Cloud (2k points) | Test $R^2 = 0.5633$ |
+| **Triplane VAE** | Generative | Point Cloud + Occupancy Grids | Val Acc = **85.49%** |
 
 
 ## Mermaid Diagrams

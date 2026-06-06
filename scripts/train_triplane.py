@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument("--num_points", type=int, default=2048, help="Number of points in input cloud")
     parser.add_argument("--num_query_points", type=int, default=2048, help="Number of query points to load")
     parser.add_argument("--smoke_test", action="store_true", help="Run a fast local test on CPU")
+    parser.add_argument("--output_suffix", type=str, default="", help="Suffix for output artifacts")
     return parser.parse_args()
 
 def train_epoch(model, dataloader, optimizer, device, beta):
@@ -174,7 +175,8 @@ def main():
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
     
     os.makedirs("models", exist_ok=True)
-    checkpoint_path = "models/triplane_vae_best.pth"
+    suffix = f"_{args.output_suffix}" if args.output_suffix else ""
+    checkpoint_path = f"models/triplane_vae_best{suffix}.pth"
     
     # 3. Training Loop
     history = {
@@ -262,14 +264,14 @@ def main():
     plt.ylabel("Accuracy")
     plt.legend()
     
-    plot_name = "triplane_training_smoke.png" if args.smoke_test else "triplane_training.png"
+    plot_name = f"triplane_training_smoke{suffix}.png" if args.smoke_test else f"triplane_training{suffix}.png"
     plot_path = f"metadata/{plot_name}"
     plt.tight_layout()
     plt.savefig(plot_path, dpi=300)
     print(f"\nTraining curves saved to: {plot_path}")
     
     # Save training history
-    history_name = "triplane_history_smoke.json" if args.smoke_test else "triplane_history.json"
+    history_name = f"triplane_history_smoke{suffix}.json" if args.smoke_test else f"triplane_history{suffix}.json"
     history_path = f"metadata/{history_name}"
     with open(history_path, "w") as f:
         json.dump(history, f, indent=4)

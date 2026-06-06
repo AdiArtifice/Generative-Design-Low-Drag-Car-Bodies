@@ -12,7 +12,7 @@ Features Computed:
     - Frontal Area (2D silhouette projection on YZ-plane using voxel grid)
 
 Usage:
-    python scripts/compute_features.py
+    python scripts/compute_features.py --input pointclouds/F_S_WWC_WM
 """
 
 import os
@@ -30,10 +30,10 @@ load_dotenv()
 def parse_args():
     parser = argparse.ArgumentParser(description="Compute aerodynamic geometric features.")
     
-    default_input = os.getenv("RAW_STL_DIR", "raw_stl/fastback smooth wheel with covers")
+    default_input = os.getenv("POINTCLOUD_DIR", "pointclouds/F_S_WWC_WM")
     default_output = os.getenv("METADATA_DIR", "metadata") + "/computed_features.csv"
     
-    parser.add_argument("--input", type=str, default=default_input, help="Raw STL input dir")
+    parser.add_argument("--input", type=str, default=default_input, help="Point Cloud input dir (.ply)")
     parser.add_argument("--output", type=str, default=default_output, help="Output CSV path")
     parser.add_argument("--resolution", type=float, default=0.005, help="Frontal area grid resolution in meters (default: 5mm)")
     
@@ -73,16 +73,16 @@ def extract_features(file_path: Path, resolution: float) -> dict:
     Extracts geometric features from a raw mesh.
     """
     record = {
-        "id": file_path.stem.replace("_norm", ""),  # Ensure raw ID format
+        "id": file_path.stem.replace("_pc", ""),  # Ensure raw ID format
         "filename": file_path.name,
         "status": "error"
     }
     
     try:
-        # Load mesh without processing to avoid topology errors blocking calculation
-        mesh = trimesh.load_mesh(str(file_path), process=False)
+        # Load point cloud using trimesh
+        mesh = trimesh.load(str(file_path), process=False)
         
-        # 1. Dimensions
+        # In trimesh, PointCloud objects also have .extents and .convex_hull
         extents = mesh.extents
         length, width, height = extents[0], extents[1], extents[2]
         
@@ -94,7 +94,6 @@ def extract_features(file_path: Path, resolution: float) -> dict:
         record["bbox_volume"] = float(length * width * height)
         
         # 3. Convex Hull Volume
-        # Computing 3D convex hull is robust and defines the exact physical wrapped volume
         convex_volume = mesh.convex_hull.volume
         record["convex_hull_volume"] = float(convex_volume)
         
@@ -131,14 +130,14 @@ def main():
         print(f"[Error] Input directory '{input_dir}' does not exist.")
         sys.exit(1)
         
-    stl_files = sorted(list(input_dir.glob("*.stl")))
+    stl_files = sorted(list(input_dir.glob("*.ply")))
     total_files = len(stl_files)
     
     if total_files == 0:
-        print(f"[Warning] No STL files found in {input_dir}")
+        print(f"[Warning] No PLY files found in {input_dir}")
         sys.exit(0)
         
-    print(f"Found {total_files} RAW meshes. Computing features...")
+    print(f"Found {total_files} Point Cloud meshes. Computing features...")
     
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     

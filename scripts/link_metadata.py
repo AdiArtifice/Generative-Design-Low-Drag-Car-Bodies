@@ -28,13 +28,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Link aerodynamic and geometric parameters into master metadata.")
     
     default_features = "metadata/computed_features.csv"
-    default_drag = "../selected_subset.csv"
     default_excel = "../DrivAerNet_ParametricData (2).xlsx"
     default_output_csv = "metadata/metadata.csv"
     default_output_json = "metadata/target_scales.json"
     
     parser.add_argument("--features-csv", type=str, default=default_features, help="Computed physical features CSV")
-    parser.add_argument("--drag-csv", type=str, default=default_drag, help="CFD drag values CSV")
     parser.add_argument("--excel-file", type=str, default=default_excel, help="DrivAerNet parametric xlsx sheet")
     parser.add_argument("--output-csv", type=str, default=default_output_csv, help="Consolidated master CSV output path")
     parser.add_argument("--output-json", type=str, default=default_output_json, help="Summary statistics JSON output path")
@@ -45,7 +43,6 @@ def main():
     args = parse_args()
     
     features_csv = Path(args.features_csv)
-    drag_csv = Path(args.drag_csv)
     excel_file = Path(args.excel_file)
     output_csv = Path(args.output_csv)
     output_json = Path(args.output_json)
@@ -54,7 +51,6 @@ def main():
     print("                Mesh Preprocessing: Metadata Linking")
     print("=" * 60)
     print(f"Features CSV      : {features_csv}")
-    print(f"Drag CSV          : {drag_csv}")
     print(f"Excel Sheet       : {excel_file}")
     print(f"Output Master CSV : {output_csv}")
     print(f"Output Statistics : {output_json}")
@@ -64,9 +60,6 @@ def main():
     if not features_csv.exists():
         print(f"[Error] Features file '{features_csv}' does not exist. Run scripts/compute_features.py first.")
         sys.exit(1)
-    if not drag_csv.exists():
-        print(f"[Error] Drag values file '{drag_csv}' does not exist.")
-        sys.exit(1)
     if not excel_file.exists():
         print(f"[Error] Parametric Excel sheet '{excel_file}' does not exist.")
         sys.exit(1)
@@ -74,32 +67,25 @@ def main():
     # 2. Load Data Sources
     print("Loading data sources...", flush=True)
     df_features = pd.read_csv(features_csv)
-    df_drag = pd.read_csv(drag_csv)
     df_excel = pd.read_excel(excel_file)
     
     # 3. ID Sanitization and Normalization
     # Trim whitespaces, enforce uppercase, and remove suffixes
     df_features["id_clean"] = df_features["id"].astype(str).str.strip().str.upper().str.replace("_NORM", "")
-    df_drag["id_clean"] = df_drag["ID"].astype(str).str.strip().str.upper().str.replace("_NORM", "")
     df_excel["id_clean"] = df_excel["Experiment"].astype(str).str.strip().str.upper().str.replace("_NORM", "")
     
     # 4. Multi-table Merging
     print("Performing multi-table joins...", flush=True)
-    # Merge Features & Drag Values
-    df_merged = pd.merge(df_features, df_drag, on="id_clean", suffixes=("", "_drag"))
-    
     # Merge with Parametric Excel sheet
-    df_final = pd.merge(df_merged, df_excel, on="id_clean", suffixes=("", "_excel"))
+    df_final = pd.merge(df_features, df_excel, on="id_clean", suffixes=("", "_excel"))
     
-    # Assertion to verify exact matching of all 100 meshes
     record_count = len(df_final)
     print(f"Successfully joined dataset. Merged record count: {record_count}")
-    assert record_count == 100, f"[Assertion Error] Expected exactly 100 records, but got {record_count}!"
     
     # 5. Feature Engineering
     print("Performing feature engineering...", flush=True)
-    # Target values: CD can be Average Cd or Drag_Value (they are identical)
-    df_final["cd"] = df_final["Drag_Value"]
+    # Target values: Extract Cd natively from the master Excel
+    df_final["cd"] = df_final["Average Cd"]
     
     # Drag Area Index: Cd * Frontal Area (essential physical metric)
     df_final["drag_area"] = df_final["cd"] * df_final["frontal_area"]
@@ -108,9 +94,9 @@ def main():
     df_final["config"] = df_final["id_clean"].apply(lambda x: "_".join(x.split("_")[:-1]))
     
     # 6. Inject relative paths for PyTorch dataloaders
-    df_final["raw_stl_path"] = df_final["id_clean"].apply(lambda x: f"raw_stl/fastback smooth wheel with covers/{x}.stl")
-    df_final["normalized_stl_path"] = df_final["id_clean"].apply(lambda x: f"normalized/fastback_smooth_wheelcovers/{x}_norm.stl")
-    df_final["pointcloud_path"] = df_final["id_clean"].apply(lambda x: f"pointclouds/fastback_smooth_wheelcovers/{x}_pc.ply")
+    df_final["raw_stl_path"] = df_final["id_clean"].apply(lambda x: f"raw_stl/F_S_WWC_WM/{x}.stl")
+    df_final["normalized_stl_path"] = df_final["id_clean"].apply(lambda x: f"normalized/F_S_WWC_WM/{x}_norm.stl")
+    df_final["pointcloud_path"] = df_final["id_clean"].apply(lambda x: f"pointclouds/F_S_WWC_WM/{x}_pc.ply")
     
     # 7. Deterministic Train/Val/Test Split (80/10/10)
     print("Executing deterministic train/val/test splits (80/10/10)...", flush=True)
@@ -119,13 +105,16 @@ def main():
     # Shuffle indices
     shuffled_indices = np.random.permutation(len(df_final))
     
+    n_train = int(len(df_final) * 0.8)
+    n_val = int(len(df_final) * 0.1)
+    
     # Split assignment
     splits = []
     for idx in range(len(df_final)):
         shuffled_pos = np.where(shuffled_indices == idx)[0][0]
-        if shuffled_pos < 80:
+        if shuffled_pos < n_train:
             splits.append("train")
-        elif shuffled_pos < 90:
+        elif shuffled_pos < n_train + n_val:
             splits.append("val")
         else:
             splits.append("test")
