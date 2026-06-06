@@ -27,3 +27,6 @@ reconstructed_test*.stl
 # Logs and temporary files
 camber-logs/
 *.log
+
+# Generated Optimization Meshes
+optimization_output/
