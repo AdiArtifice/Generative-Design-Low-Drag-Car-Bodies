@@ -54,13 +54,12 @@ def train(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
     
     # 2. Load Pre-trained VAE
-    print("Loading pre-trained Triplane VAE...")
+    print(f"Loading pre-trained Triplane VAE from {args.vae_path}...")
     vae = TriplaneVAE(in_channels=6, latent_dim=256, plane_channels=16, plane_resolution=64).to(device)
-    vae_path = "models/triplane_vae_best.pth"
-    if not os.path.exists(vae_path):
-        raise FileNotFoundError(f"Missing {vae_path}. Train the Triplane VAE first.")
+    if not os.path.exists(args.vae_path):
+        raise FileNotFoundError(f"Missing {args.vae_path}. Train the Triplane VAE first.")
     
-    vae.load_state_dict(torch.load(vae_path, map_location=device))
+    vae.load_state_dict(torch.load(args.vae_path, map_location=device))
     vae.eval()
     for param in vae.parameters():
         param.requires_grad = False
@@ -68,6 +67,7 @@ def train(args):
     # 3. Initialize Latent Drag Regressor
     model = LatentDragRegressor(latent_dim=256).to(device)
     criterion = nn.MSELoss()
+    suffix = f"_{args.output_suffix}" if args.output_suffix else ""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
     
@@ -127,8 +127,9 @@ def train(args):
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_no_improve = 0
-            save_path = "models/latent_regressor_smoke.pth" if args.smoke_test else "models/latent_regressor_best.pth"
+            save_path = f"models/latent_regressor_smoke{suffix}.pth" if args.smoke_test else f"models/latent_regressor_best{suffix}.pth"
             torch.save(model.state_dict(), save_path)
+            print(f"  --> Saved new best regressor model checkpoint to {save_path}")
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= early_stop_patience:
@@ -143,6 +144,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--seed", type=int, default=42, help="Seed for reproducibility")
+    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best.pth", help="Path to pre-trained VAE weights")
+    parser.add_argument("--output_suffix", type=str, default="", help="Suffix for output regressor weights")
     parser.add_argument("--smoke_test", action="store_true", help="Run a quick test with tiny dataset")
     args = parser.parse_args()
     

@@ -89,31 +89,29 @@ def optimize(args):
     print(f"Using device: {device.type.upper()}")
     
     # 1. Load VAE
-    print("Loading Triplane VAE...")
+    print(f"Loading Triplane VAE from {args.vae_path}...")
     vae = TriplaneVAE(in_channels=6, latent_dim=256, plane_channels=16, plane_resolution=64).to(device)
-    vae_path = "models/triplane_vae_best.pth"
-    if not os.path.exists(vae_path):
-        print(f"Error: {vae_path} not found.")
+    if not os.path.exists(args.vae_path):
+        print(f"Error: {args.vae_path} not found.")
         sys.exit(1)
-    vae.load_state_dict(torch.load(vae_path, map_location=device))
+    vae.load_state_dict(torch.load(args.vae_path, map_location=device))
     vae.eval()
     for param in vae.parameters():
         param.requires_grad = False
         
     # 2. Load Latent Regressor
-    print("Loading Latent Drag Regressor...")
+    print(f"Loading Latent Drag Regressor from {args.regressor_path}...")
     regressor = LatentDragRegressor(latent_dim=256).to(device)
-    reg_path = "models/latent_regressor_best.pth"
-    if not os.path.exists(reg_path):
-        # Fallback to smoke model if available
-        if os.path.exists("models/latent_regressor_smoke.pth"):
+    if not os.path.exists(args.regressor_path):
+        # Fallback to smoke model if default file not found and smoke is available
+        if args.regressor_path == "models/latent_regressor_best.pth" and os.path.exists("models/latent_regressor_smoke.pth"):
             print("Warning: Using smoke model as latent_regressor_best.pth is not found.")
-            reg_path = "models/latent_regressor_smoke.pth"
+            args.regressor_path = "models/latent_regressor_smoke.pth"
         else:
-            print(f"Error: {reg_path} not found.")
+            print(f"Error: {args.regressor_path} not found.")
             sys.exit(1)
             
-    regressor.load_state_dict(torch.load(reg_path, map_location=device))
+    regressor.load_state_dict(torch.load(args.regressor_path, map_location=device))
     regressor.eval()
     for param in regressor.parameters():
         param.requires_grad = False
@@ -198,6 +196,8 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=250, help="Number of optimization steps")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate for Adam optimizer")
     parser.add_argument("--lambda_reg", type=float, default=0.1, help="L2 penalty weight to preserve core structure")
+    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best.pth", help="Path to pre-trained VAE weights")
+    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best.pth", help="Path to trained regressor weights")
     parser.add_argument("--seed", type=int, default=42, help="Seed for reproducibility")
     args = parser.parse_args()
     
