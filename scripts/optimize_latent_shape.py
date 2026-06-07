@@ -126,9 +126,20 @@ def optimize(args):
         normalize_targets=False
     )
     
-    # Find highest drag car in test set
-    dataset_idx = dataset.df['drag_area'].argmax()
-    row = dataset.df.iloc[dataset_idx]
+    # Filter for cars that actually exist locally
+    valid_mask = dataset.df['pointcloud_path'].apply(os.path.exists)
+    valid_df = dataset.df[valid_mask]
+    
+    if len(valid_df) == 0:
+        print("Error: No test cars found locally! Cannot perform local optimization.")
+        sys.exit(1)
+        
+    # Find highest drag car among the valid local cars
+    highest_drag_idx = valid_df['drag_area'].idxmax()
+    row = valid_df.loc[highest_drag_idx]
+    
+    # Get the integer index for the dataset loader
+    dataset_idx = dataset.df.index.get_loc(highest_drag_idx)
     baseline_id = row['id']
     
     print(f"Selected baseline car: {baseline_id} with original drag_area = {row['drag_area']:.4f} m^2")
@@ -195,9 +206,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=250, help="Number of optimization steps")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate for Adam optimizer")
-    parser.add_argument("--lambda_reg", type=float, default=0.1, help="L2 penalty weight to preserve core structure")
-    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best.pth", help="Path to pre-trained VAE weights")
-    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best.pth", help="Path to trained regressor weights")
+    parser.add_argument("--lambda_reg", type=float, default=0.001, help="L2 penalty weight to preserve core structure")
+    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best_80.pth", help="Path to pre-trained VAE weights")
+    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best_80.pth", help="Path to trained regressor weights")
     parser.add_argument("--seed", type=int, default=42, help="Seed for reproducibility")
     args = parser.parse_args()
     
