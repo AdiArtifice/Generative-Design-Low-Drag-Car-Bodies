@@ -1,6 +1,6 @@
 # Executive Summary
 
-This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** of 4,857 meshes with associated CFD drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, **occupancy grid preprocessing**, **metadata integration**, and a **Conditional Triplane VAE (C-VAE)** architecture. We scaled our implementation from an initial single-configuration sandbox (`F_S_WWC_WM`, 692 samples) to a complete **7-configuration streaming preprocessing workflow** (`E_S_WW_WM`, `E_S_WWC_WM`, `F_S_WWC_WM`, `F_S_WWS_WM`, `N_S_WW_WM`, `N_S_WWC_WM`, `N_S_WWS_WM`), yielding **4,857 preprocessed vehicle samples**. The **C-VAE** conditions the PointNet encoder and Triplane decoder on learned label embeddings (`Fastback=0`, `Estateback=1`, `Notchback=2`) to prevent geometric mode collapse across diverse body shapes.
+This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** of 4,165 meshes with associated CFD drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, **occupancy grid preprocessing**, **metadata integration**, and a **Conditional Triplane VAE (C-VAE)** architecture. We scaled our implementation from an initial single-configuration sandbox (`F_S_WWC_WM`, 692 samples) to a complete **7-configuration streaming preprocessing workflow** (`E_S_WW_WM`, `E_S_WWC_WM`, `F_S_WWC_WM`, `F_S_WWS_WM`, `N_S_WW_WM`, `N_S_WWC_WM`, `N_S_WWS_WM`), yielding **4,165 preprocessed vehicle samples**. The **C-VAE** conditions the PointNet encoder and Triplane decoder on learned label embeddings (`Fastback=0`, `Estateback=1`, `Notchback=2`) to prevent geometric mode collapse across diverse body shapes.
 
 ---
 
@@ -52,7 +52,7 @@ This project focuses on **learning geometry-aerodynamics relationships** for car
 ## Dataset Description
 
 - **Source:** DrivAerNet++ 3D vehicle geometry and aerodynamic dataset.
-- **Total Preprocessed Dataset:** **4,857 unique 3D vehicle meshes** across 7 configurations.
+- **Total Preprocessed Dataset:** **4,165 unique 3D vehicle meshes** across 7 configurations.
 - **Point Cloud Representation:** 50,000 surface points + normal vectors per mesh (`.ply` format).
 - **Occupancy Representation:** 2,048 interior/exterior query points and occupancy labels per mesh (`.npz` format).
 - **Metadata:** Master metadata file (`metadata/metadata.csv`) containing `id`, `config`, `body_type`, `body_type_idx` (`0: F`, `1: E`, `2: N`), `cd`, `drag_area`, and split assignment (`train`, `val`, `test`).
@@ -61,14 +61,14 @@ This project focuses on **learning geometry-aerodynamics relationships** for car
 
 | Config Code | Body Type | Underbody | Wheel Covers | Wheel Mesh | Sample Count |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| **`E_S_WW_WM`** | Estateback (`E`) | Smooth (`S`) | Standard (`WW`) | Yes (`WM`) | 698 |
 | **`F_S_WWC_WM`** | Fastback (`F`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 692 |
-| **`F_S_WWS_WM`** | Fastback (`F`) | Smooth (`S`) | No (`WWS`) | Yes (`WM`) | 692 |
-| **`E_S_WW_WM`** | Estateback (`E`) | Smooth (`S`) | Standard (`WW`) | Yes (`WM`) | 692 |
-| **`E_S_WWC_WM`** | Estateback (`E`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 692 |
-| **`N_S_WW_WM`** | Notchback (`N`) | Smooth (`S`) | Standard (`WW`) | Yes (`WM`) | 692 |
-| **`N_S_WWC_WM`** | Notchback (`N`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 692 |
-| **`N_S_WWS_WM`** | Notchback (`N`) | Smooth (`S`) | No (`WWS`) | Yes (`WM`) | 707 |
-| **Total** | | | | | **4,857** |
+| **`E_S_WWC_WM`** | Estateback (`E`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 688 |
+| **`F_S_WWS_WM`** | Fastback (`F`) | Smooth (`S`) | No (`WWS`) | Yes (`WM`) | 684 |
+| **`N_S_WW_WM`** | Notchback (`N`) | Smooth (`S`) | Standard (`WW`) | Yes (`WM`) | 676 |
+| **`N_S_WWC_WM`** | Notchback (`N`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 386 |
+| **`N_S_WWS_WM`** | Notchback (`N`) | Smooth (`S`) | No (`WWS`) | Yes (`WM`) | 341 |
+| **Total** | | | | | **4,165** |
 
 ---
 
@@ -76,9 +76,9 @@ This project focuses on **learning geometry-aerodynamics relationships** for car
 
 The master dataset split is deterministically balanced as follows:
 
-- **Train Set (80%):** 3,885 vehicles
-- **Validation Set (10%):** 485 vehicles
-- **Test Set (10%):** 487 vehicles
+- **Train Set (80%):** 3,332 vehicles
+- **Validation Set (10%):** 416 vehicles
+- **Test Set (10%):** 417 vehicles
 - **Point Cloud Inputs:** 2,048 points sampled dynamically per item during training.
 - **Occupancy Inputs:** 2,048 query 3D points paired with binary occupancy labels (0/1).
 

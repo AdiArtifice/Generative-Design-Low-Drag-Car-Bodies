@@ -8,9 +8,9 @@ This document outlines the project roadmap following the successful completion o
 **Goal:** Expand the dataset from 692 Fastbacks (`F_S_WWC_WM`) to a 7-configuration vehicle dataset covering Fastback, Estateback, and Notchback body types.
 * **What we did:** 
   1. Processed all 7 target vehicle configurations (`E_S_WW_WM`, `E_S_WWC_WM`, `F_S_WWC_WM`, `F_S_WWS_WM`, `N_S_WW_WM`, `N_S_WWC_WM`, `N_S_WWS_WM`) using a stream-and-delete parallel pipeline.
-  2. Preprocessed **4,857 unique vehicle meshes** into 50,000-point surface point clouds (`.ply`) and 2,048 query point occupancy grids (`.npz`).
-  3. Built master metadata file `metadata/metadata.csv` with a deterministic 80/10/10 split (3,885 Train / 485 Val / 487 Test) and class index mappings (`0: Fastback`, `1: Estateback`, `2: Notchback`).
-* **Outcome:** Clean, standardized dataset of 4,857 samples ready for multi-class C-VAE training.
+  2. Preprocessed **4,165 unique vehicle meshes** into 50,000-point surface point clouds (`.ply`) and 2,048 query point occupancy grids (`.npz`).
+  3. Built master metadata file `metadata/metadata.csv` with a deterministic 80/10/10 split (3,332 Train / 416 Val / 417 Test) and class index mappings (`0: Fastback`, `1: Estateback`, `2: Notchback`).
+* **Outcome:** Clean, standardized dataset of 4,165 samples ready for multi-class C-VAE training.
 
 ---
 
@@ -25,7 +25,7 @@ This document outlines the project roadmap following the successful completion o
 ---
 
 ## 🟡 Next Immediate Step: Phase 6C: C-VAE Training & Drag Regressor Retraining on GPU
-**Goal:** Train the C-VAE and Latent Drag Regressor on the complete 4,857-sample multi-config dataset.
+**Goal:** Train the C-VAE and Latent Drag Regressor on the complete 4,165-sample multi-config dataset.
 * **What we do:**
   1. Train the C-VAE model on GPU (`python scripts/train_triplane.py --epochs 20 --batch_size 16 --lr 1e-3 --beta 0.005`) to learn a smooth, class-conditioned 3D shape space.
   2. Retrain the `LatentDragRegressor` on the new multi-config latent space $z$ to predict drag coefficients across Fastbacks, Estatebacks, and Notchbacks.
