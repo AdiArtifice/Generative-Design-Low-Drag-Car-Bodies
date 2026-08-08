@@ -186,12 +186,20 @@ class VehicleOccupancyDataset(Dataset):
         features_tensor = torch.tensor(features, dtype=torch.float32).t() # shape: [6, num_points]
         
         # 2. Load occupancy query points and labels
-        norm_stl_path = Path(row["normalized_stl_path"])
-        rel_to_norm = norm_stl_path.relative_to("normalized")
-        occ_path = Path(self.occupancy_dir) / rel_to_norm.parent / f"{rel_to_norm.stem}_occ.npz"
+        raw_occ_path = Path(row["occupancy_path"])
+        if raw_occ_path.parts and raw_occ_path.parts[0] == "occupancy":
+            occ_rel_path = Path(*raw_occ_path.parts[1:])
+        else:
+            occ_rel_path = raw_occ_path
+        occ_path = Path(self.occupancy_dir) / occ_rel_path
         
         if not occ_path.exists():
-            raise FileNotFoundError(f"Occupancy file not found at {occ_path}. Please run preprocess_occupancy.py first.")
+            alt_name = occ_path.name.replace("_occ.npz", "_norm_occ.npz") if "_occ.npz" in occ_path.name else occ_path.name.replace("_norm_occ.npz", "_occ.npz")
+            alt_path = occ_path.parent / alt_name
+            if alt_path.exists():
+                occ_path = alt_path
+            else:
+                raise FileNotFoundError(f"Occupancy file not found at {occ_path}. Please run preprocess_occupancy.py first.")
             
         occ_data = np.load(str(occ_path))
         q_pts = occ_data["query_points"].astype(np.float32) # shape: [TotalQueryPoints, 3]

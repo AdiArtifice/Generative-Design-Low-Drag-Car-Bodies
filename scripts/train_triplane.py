@@ -224,12 +224,12 @@ def main():
         
         print(f"Epoch {epoch+1:02d}/{args.epochs} | "
               f"Train Loss: {train_loss:.4f} (Recon: {train_recon:.4f}, KL: {train_kl:.4f}, Acc: {train_acc:.4f}) | "
-              f"Val Loss: {val_loss:.4f} (Recon: {val_recon:.4f}, KL: {val_kl:.4f}, Acc: {val_acc:.4f})")
+              f"Val Loss: {val_loss:.4f} (Recon: {val_recon:.4f}, KL: {val_kl:.4f}, Acc: {val_acc:.4f})", flush=True)
               
         if val_loss < best_val_loss and not args.smoke_test:
             best_val_loss = val_loss
             torch.save(model.state_dict(), checkpoint_path)
-            print(f"  --> Saved new best model checkpoint to {checkpoint_path}")
+            print(f"  --> Saved new best model checkpoint to {checkpoint_path}", flush=True)
             
     # Save the last model in case of smoke test
     if args.smoke_test:

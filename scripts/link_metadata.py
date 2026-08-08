@@ -113,7 +113,17 @@ def main():
     df_final["raw_stl_path"] = df_final.apply(lambda row: f"raw_stl/{row['config']}/{row['id_clean']}.stl", axis=1)
     df_final["normalized_stl_path"] = df_final.apply(lambda row: f"normalized/{row['config']}/{row['id_clean']}_norm.stl", axis=1)
     df_final["pointcloud_path"] = df_final.apply(lambda row: f"pointclouds/{row['config']}/{row['id_clean']}_pc.ply", axis=1)
-    df_final["occupancy_path"] = df_final.apply(lambda row: f"occupancy/{row['config']}/{row['id_clean']}_occ.npz", axis=1)
+    
+    def resolve_occ_path(row):
+        std_p = f"occupancy/{row['config']}/{row['id_clean']}_occ.npz"
+        norm_p = f"occupancy/{row['config']}/{row['id_clean']}_norm_occ.npz"
+        if os.path.exists(std_p):
+            return std_p
+        elif os.path.exists(norm_p):
+            return norm_p
+        return std_p
+
+    df_final["occupancy_path"] = df_final.apply(resolve_occ_path, axis=1)
     
     # 7. Deterministic Train/Val/Test Split (80/10/10)
     print("Executing deterministic train/val/test splits (80/10/10)...", flush=True)

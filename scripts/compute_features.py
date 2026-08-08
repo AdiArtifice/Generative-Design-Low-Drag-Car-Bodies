@@ -138,22 +138,32 @@ def main():
         print(f"[Warning] No PLY files found in {input_dir}")
         sys.exit(0)
         
-    print(f"Found {total_files} Point Cloud meshes. Computing features...")
+    print(f"Found {total_files} Point Cloud meshes. Computing features in parallel...")
     
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from functools import partial
+
+    worker_fn = partial(extract_features, resolution=args.resolution)
     records = []
-    for idx, file_path in enumerate(stl_files, start=1):
-        print(f"[{idx}/{total_files}] Processing {file_path.name}...", end="", flush=True)
-        res = extract_features(file_path, args.resolution)
-        records.append(res)
-        
-        if res["status"] == "success":
-            print(f" Area: {res['frontal_area']:.3f}m²", flush=True)
-        
-        # Crucial for stable RAM constraint (<1GB)
-        gc.collect()
-        
+    
+    max_workers = min(os.cpu_count() or 4, 16)
+    print(f"Using {max_workers} worker processes...")
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(worker_fn, f): f for f in stl_files}
+        completed = 0
+        for future in as_completed(futures):
+            res = future.result()
+            records.append(res)
+            completed += 1
+            if completed % 100 == 0 or completed == total_files:
+                print(f"Progress: [{completed}/{total_files}] files processed...", flush=True)
+
+    # Sort records by id to keep deterministic order
+    records.sort(key=lambda r: r.get("id", ""))
+    
     # Export report
     df_features = pd.DataFrame(records)
     df_features.to_csv(output_csv, index=False)
