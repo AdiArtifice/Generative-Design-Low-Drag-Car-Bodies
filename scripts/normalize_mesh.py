@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """
-Mesh Normalization Script
-------------------------
-This script loads the raw STL meshes, translates them so their bounding box
+Mesh Normalization Script (Open3D-Accelerated)
+----------------------------------------------
+This script loads the raw STL meshes using Open3D, translates them so their bounding box
 center is at the origin (0, 0, 0), scales them uniformly so their largest
-dimension equals 1.0 (unit bounding box scaling), and exports the resulting
+dimension equals 1.0 (unit bounding box scaling) using NumPy, and exports the resulting
 normalized STL files.
 
 Usage:
@@ -16,14 +16,15 @@ import sys
 import gc
 import argparse
 from pathlib import Path
-import trimesh
+import numpy as np
+import open3d as o3d
 from dotenv import load_dotenv
 
 # Load configuration from .env file
 load_dotenv()
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Center and scale STL meshes.")
+    parser = argparse.ArgumentParser(description="Center and scale STL meshes using Open3D.")
     
     # Default paths from environment variables, falling back to sensible project defaults
     default_input = os.getenv("RAW_STL_DIR", "raw_stl/fastback smooth wheel with covers")
@@ -53,7 +54,7 @@ def parse_args():
 
 def normalize_mesh(file_path: Path, output_dir: Path, center_method: str) -> bool:
     """
-    Centers and scales a single mesh, then exports it.
+    Centers and scales a single mesh using Open3D and NumPy, then exports it.
     
     Parameters:
         file_path (Path): Path to the input STL file.
@@ -64,37 +65,53 @@ def normalize_mesh(file_path: Path, output_dir: Path, center_method: str) -> boo
         bool: True if successful, False otherwise.
     """
     try:
-        # Load mesh. process=False preserves raw topology exactly.
-        mesh = trimesh.load_mesh(str(file_path), process=False)
+        # Load mesh using Open3D
+        mesh = o3d.io.read_triangle_mesh(str(file_path))
         
-        if not isinstance(mesh, trimesh.Trimesh):
-            raise ValueError(f"File loaded is not a valid Trimesh object: {type(mesh)}")
+        if not mesh.has_triangles():
+            raise ValueError(f"File loaded is not a valid triangle mesh: {file_path.name}")
+            
+        # Get vertices as numpy array
+        vertices = np.asarray(mesh.vertices)
+        if len(vertices) == 0:
+            raise ValueError("Mesh has 0 vertices.")
             
         # 1. Centering
         if center_method == "bounds":
             # Center of the bounding box
-            center = mesh.bounds.mean(axis=0)
+            min_box = vertices.min(axis=0)
+            max_box = vertices.max(axis=0)
+            center = (min_box + max_box) / 2.0
         else:
-            # Centroid (center of mass/volume)
-            center = mesh.centroid
+            # Centroid (average of vertices)
+            center = vertices.mean(axis=0)
             
-        mesh.apply_translation(-center)
+        vertices = vertices - center
         
         # 2. Scaling (uniform scaling to fit largest dimension to 1.0)
-        extents = mesh.extents
-        if extents is None or max(extents) == 0:
+        min_box = vertices.min(axis=0)
+        max_box = vertices.max(axis=0)
+        extents = max_box - min_box
+        max_extent = max(extents)
+        if max_extent == 0:
             raise ValueError("Mesh extents are invalid or zero.")
             
-        scale_factor = 1.0 / max(extents)
-        mesh.apply_scale(scale_factor)
+        scale_factor = 1.0 / max_extent
+        vertices = vertices * scale_factor
+        
+        # Update mesh vertices
+        mesh.vertices = o3d.utility.Vector3dVector(vertices)
+        
+        # Recompute normals before exporting (critical for STL format in Open3D)
+        mesh.compute_triangle_normals()
+        mesh.compute_vertex_normals()
         
         # 3. Export
-        # Append '_norm' to the filename as per naming conventions
         output_filename = f"{file_path.stem}_norm.stl"
         output_path = output_dir / output_filename
         
         # Export mesh (binary STL format is more compact and loads much faster)
-        mesh.export(str(output_path), file_type="stl")
+        o3d.io.write_triangle_mesh(str(output_path), mesh, write_ascii=False)
         
         # Explicit cleanup to keep memory footprint tiny
         del mesh
@@ -111,7 +128,7 @@ def main():
     output_dir = Path(args.output)
     
     print("=" * 60)
-    print("                Mesh Preprocessing Pipeline: Normalization")
+    print("        Mesh Preprocessing Pipeline: Normalization (Open3D)")
     print("=" * 60)
     print(f"Input directory : {input_dir}")
     print(f"Output directory: {output_dir}")

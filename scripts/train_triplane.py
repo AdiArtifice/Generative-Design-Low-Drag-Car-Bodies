@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 """
-Triplane VAE Training Script (Phase 4, Step 2)
-----------------------------------------------
-Trains the Triplane VAE to learn a continuous latent shape space and occupancy field.
-Optimized using BCE (reconstruction) + KL divergence (regularization) loss.
-Supports a `--smoke-test` mode to run locally on CPU with minimal samples.
+Conditional Triplane VAE (C-VAE) Training Script
+-------------------------------------------------
+Trains the Conditional Triplane VAE to learn a continuous latent shape space and occupancy field
+conditioned on body type class embeddings (Fastback, Estateback, Notchback).
+
+Supports `--smoke_test` mode to run locally on CPU with minimal samples.
 
 Usage:
-    python scripts/train_triplane.py --epochs 20 --batch_size 4 --beta 0.01
+    python scripts/train_triplane.py --epochs 20 --batch_size 4 --beta 0.005
 """
 
 import os
@@ -27,13 +28,15 @@ from src.dataset import VehicleOccupancyDataset
 from src.models.triplane import TriplaneVAE
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train Triplane VAE for Implicit Occupancy Fields")
+    parser = argparse.ArgumentParser(description="Train Conditional Triplane VAE (C-VAE)")
     parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--latent_dim", type=int, default=256, help="Latent space dimension z")
     parser.add_argument("--plane_channels", type=int, default=16, help="Channels per triplane")
     parser.add_argument("--plane_res", type=int, default=64, help="Resolution of each triplane")
+    parser.add_argument("--num_classes", type=int, default=3, help="Number of body type categories (F, E, N)")
+    parser.add_argument("--embed_dim", type=int, default=16, help="Category embedding vector dimension")
     parser.add_argument("--beta", type=float, default=0.005, help="KL Divergence weight hyperparameter")
     parser.add_argument("--num_points", type=int, default=2048, help="Number of points in input cloud")
     parser.add_argument("--num_query_points", type=int, default=2048, help="Number of query points to load")
@@ -49,15 +52,16 @@ def train_epoch(model, dataloader, optimizer, device, beta):
     total_acc = 0.0
     num_samples = 0
     
-    for batch_idx, (pc, query_pts, occupancy, _) in enumerate(dataloader):
+    for batch_idx, (pc, query_pts, occupancy, class_idx, targets) in enumerate(dataloader):
         pc = pc.to(device)
         query_pts = query_pts.to(device)
         occupancy = occupancy.to(device) # [B, N_q]
+        class_idx = class_idx.to(device) # [B]
         
         optimizer.zero_grad()
         
-        # Forward pass
-        logits, mu, logvar = model(pc, query_pts) # logits: [B, N_q]
+        # Forward pass with class conditioning
+        logits, mu, logvar = model(pc, query_pts, class_idx) # logits: [B, N_q]
         
         # 1. Reconstruction Loss: Binary Cross Entropy
         recon_loss = F.binary_cross_entropy_with_logits(logits, occupancy, reduction='mean')
@@ -93,12 +97,13 @@ def validate(model, dataloader, device, beta):
     num_samples = 0
     
     with torch.no_grad():
-        for pc, query_pts, occupancy, _ in dataloader:
+        for pc, query_pts, occupancy, class_idx, targets in dataloader:
             pc = pc.to(device)
             query_pts = query_pts.to(device)
             occupancy = occupancy.to(device)
+            class_idx = class_idx.to(device)
             
-            logits, mu, logvar = model(pc, query_pts)
+            logits, mu, logvar = model(pc, query_pts, class_idx)
             
             recon_loss = F.binary_cross_entropy_with_logits(logits, occupancy, reduction='mean')
             kl_loss = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=-1))
@@ -129,7 +134,7 @@ def main():
         args.num_query_points = 512
         
     print(f"Config: Epochs={args.epochs}, Batch Size={args.batch_size}, LR={args.lr}, Beta={args.beta}")
-    print(f"Model: LatentDim={args.latent_dim}, PlaneChannels={args.plane_channels}, PlaneRes={args.plane_res}")
+    print(f"C-VAE Model: LatentDim={args.latent_dim}, PlaneChannels={args.plane_channels}, PlaneRes={args.plane_res}, NumClasses={args.num_classes}, EmbedDim={args.embed_dim}")
     
     # Setup Device
     if args.smoke_test:
@@ -153,8 +158,6 @@ def main():
         normalize_targets=True
     )
     
-    # If in smoke test mode, restrict dataframe rows to first 2 samples
-    # to avoid loading files that haven't been preprocessed yet.
     if args.smoke_test:
         train_dataset.df = train_dataset.df.head(2).reset_index(drop=True)
         val_dataset.df = val_dataset.df.head(2).reset_index(drop=True)
@@ -168,7 +171,9 @@ def main():
         in_channels=6,
         latent_dim=args.latent_dim,
         plane_channels=args.plane_channels,
-        plane_resolution=args.plane_res
+        plane_resolution=args.plane_res,
+        num_classes=args.num_classes,
+        embed_dim=args.embed_dim
     ).to(device)
     
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
@@ -188,7 +193,7 @@ def main():
     
     best_val_loss = float('inf')
     
-    print("\nStarting training loop...")
+    print("\nStarting C-VAE training loop...")
     for epoch in range(args.epochs):
         train_loss, train_recon, train_kl, train_acc = train_epoch(
             model=model,
@@ -276,7 +281,7 @@ def main():
     with open(history_path, "w") as f:
         json.dump(history, f, indent=4)
     print(f"Training history metrics saved to: {history_path}")
-    print("--- Training Script Completed Successfully ---")
+    print("--- C-VAE Training Script Completed Successfully ---")
 
 if __name__ == "__main__":
     main()

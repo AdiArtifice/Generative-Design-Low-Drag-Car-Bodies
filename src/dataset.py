@@ -76,7 +76,18 @@ class VehiclePointCloudDataset(Dataset):
         # Transpose to [6, num_points] as expected by PyTorch 1D convolutions (PointNet)
         features_tensor = torch.tensor(features, dtype=torch.float32).t() # shape: [6, num_points]
         
-        # 4. Extract targets
+        # 4. Extract targets & body_type class index (0: F, 1: E, 2: N)
+        body_type_map = {'F': 0, 'E': 1, 'N': 2}
+        if "body_type_idx" in row and not pd.isna(row["body_type_idx"]):
+            class_idx = int(row["body_type_idx"])
+        elif "body_type" in row and not pd.isna(row["body_type"]):
+            class_idx = body_type_map.get(str(row["body_type"])[0].upper(), 0)
+        else:
+            cfg = str(row.get("config", row["id"]))
+            class_idx = body_type_map.get(cfg[0].upper(), 0)
+            
+        class_idx_tensor = torch.tensor(class_idx, dtype=torch.long)
+        
         cd_raw = float(row["cd"])
         drag_area_raw = float(row["drag_area"])
         
@@ -96,10 +107,11 @@ class VehiclePointCloudDataset(Dataset):
             "cd_raw": torch.tensor(cd_raw, dtype=torch.float32),
             "drag_area_raw": torch.tensor(drag_area_raw, dtype=torch.float32),
             "cd": torch.tensor(cd_norm, dtype=torch.float32),
-            "drag_area": torch.tensor(drag_area_norm, dtype=torch.float32)
+            "drag_area": torch.tensor(drag_area_norm, dtype=torch.float32),
+            "class_idx": class_idx_tensor
         }
         
-        return features_tensor, targets
+        return features_tensor, class_idx_tensor, targets
 
 class VehicleOccupancyDataset(Dataset):
     """
@@ -198,7 +210,18 @@ class VehicleOccupancyDataset(Dataset):
         query_points_tensor = torch.tensor(q_pts, dtype=torch.float32) # shape: [num_query_points, 3]
         occupancy_tensor = torch.tensor(occ_lbls, dtype=torch.float32) # shape: [num_query_points]
         
-        # 3. Extract and normalize targets
+        # 3. Extract targets & body_type class index
+        body_type_map = {'F': 0, 'E': 1, 'N': 2}
+        if "body_type_idx" in row and not pd.isna(row["body_type_idx"]):
+            class_idx = int(row["body_type_idx"])
+        elif "body_type" in row and not pd.isna(row["body_type"]):
+            class_idx = body_type_map.get(str(row["body_type"])[0].upper(), 0)
+        else:
+            cfg = str(row.get("config", row["id"]))
+            class_idx = body_type_map.get(cfg[0].upper(), 0)
+            
+        class_idx_tensor = torch.tensor(class_idx, dtype=torch.long)
+        
         cd_raw = float(row["cd"])
         drag_area_raw = float(row["drag_area"])
         
@@ -216,10 +239,11 @@ class VehicleOccupancyDataset(Dataset):
             "cd_raw": torch.tensor(cd_raw, dtype=torch.float32),
             "drag_area_raw": torch.tensor(drag_area_raw, dtype=torch.float32),
             "cd": torch.tensor(cd_norm, dtype=torch.float32),
-            "drag_area": torch.tensor(drag_area_norm, dtype=torch.float32)
+            "drag_area": torch.tensor(drag_area_norm, dtype=torch.float32),
+            "class_idx": class_idx_tensor
         }
         
-        return features_tensor, query_points_tensor, occupancy_tensor, targets
+        return features_tensor, query_points_tensor, occupancy_tensor, class_idx_tensor, targets
 
 # Smoke-test block to verify data loading pipelines
 if __name__ == "__main__":
@@ -235,8 +259,8 @@ if __name__ == "__main__":
             normalize_targets=True
         )
         print(f"PointCloud dataset created. Samples: {len(dataset_pc)}")
-        features, targets = dataset_pc[0]
-        print(f"PointCloud item retrieval: Features shape {features.shape}")
+        features, class_idx, targets = dataset_pc[0]
+        print(f"PointCloud item retrieval: Features shape {features.shape}, Class Index: {class_idx.item()}")
         
         # Test 2: VehicleOccupancyDataset
         print("\nTesting VehicleOccupancyDataset...")
@@ -249,20 +273,22 @@ if __name__ == "__main__":
             normalize_targets=True
         )
         print(f"Occupancy dataset created. Samples: {len(dataset_occ)}")
-        features, query_points, occupancy, targets = dataset_occ[0]
+        features, query_points, occupancy, class_idx, targets = dataset_occ[0]
         print("Occupancy item retrieval:")
         print(f"  - PC Features shape: {features.shape} (Expected: [6, 2048])")
         print(f"  - Query points shape: {query_points.shape} (Expected: [2048, 3])")
         print(f"  - Occupancy shape: {occupancy.shape} (Expected: [2048])")
+        print(f"  - Class index: {class_idx.item()} (Expected: 0, 1, or 2)")
         print(f"  - Inside points count: {int(occupancy.sum())}")
         
         # Test DataLoader batching
         dataloader = DataLoader(dataset_occ, batch_size=4, shuffle=True)
-        b_features, b_q_pts, b_occ, b_targets = next(iter(dataloader))
+        b_features, b_q_pts, b_occ, b_class_idx, b_targets = next(iter(dataloader))
         print("\nDataLoader batching test successful!")
         print(f"  - Batch features shape: {b_features.shape} (Expected: [4, 6, 2048])")
         print(f"  - Batch query points shape: {b_q_pts.shape} (Expected: [4, 2048, 3])")
         print(f"  - Batch occupancy shape: {b_occ.shape} (Expected: [4, 2048])")
+        print(f"  - Batch class indices: {b_class_idx.tolist()} (Expected: len 4)")
         
         print("\n--- All Dataset Smoke-Tests PASSED! ---")
         
@@ -270,4 +296,5 @@ if __name__ == "__main__":
         print("\n--- Smoke-Test FAILED! ---")
         import traceback
         traceback.print_exc()
+
 

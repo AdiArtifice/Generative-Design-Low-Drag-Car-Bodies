@@ -2,14 +2,14 @@
 """
 Feature Engineering Script
 --------------------------
-This script calculates advanced aerodynamic and geometric features from the 
-RAW STL meshes (to preserve physical scale and dimensions).
+This script calculates geometric features from point cloud meshes.
 
 Features Computed:
     - Bounding Box Dimensions: Length (X), Width (Y), Height (Z)
     - Bounding Box Volume (L * W * H)
     - Convex Hull Volume (volume of the 3D tightly wrapped convex hull)
-    - Frontal Area (2D silhouette projection on YZ-plane using voxel grid)
+    - Normalized Frontal Area (2D silhouette projection on YZ-plane; Note: True physical Frontal Area
+      is merged from DrivAerNetPlusPlus_CarDesign_Areas.csv in scripts/link_metadata.py)
 
 Usage:
     python scripts/compute_features.py --input pointclouds/F_S_WWC_WM
@@ -130,7 +130,8 @@ def main():
         print(f"[Error] Input directory '{input_dir}' does not exist.")
         sys.exit(1)
         
-    stl_files = sorted(list(input_dir.glob("*.ply")))
+    # Find all PLY files recursively to support multiple configuration subfolders
+    stl_files = sorted(list(input_dir.glob("**/*.ply")))
     total_files = len(stl_files)
     
     if total_files == 0:

@@ -28,12 +28,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Link aerodynamic and geometric parameters into master metadata.")
     
     default_features = "metadata/computed_features.csv"
-    default_excel = "../DrivAerNet_ParametricData (2).xlsx"
+    default_excel = "../DrivAerNet_ParametricData (2).xlsx" if os.path.exists("../DrivAerNet_ParametricData (2).xlsx") else "DrivAerNet_ParametricData (2).xlsx"
+    default_areas = "../DrivAerNetPlusPlus_CarDesign_Areas.csv" if os.path.exists("../DrivAerNetPlusPlus_CarDesign_Areas.csv") else "DrivAerNetPlusPlus_CarDesign_Areas.csv"
     default_output_csv = "metadata/metadata.csv"
     default_output_json = "metadata/target_scales.json"
     
     parser.add_argument("--features-csv", type=str, default=default_features, help="Computed physical features CSV")
     parser.add_argument("--excel-file", type=str, default=default_excel, help="DrivAerNet parametric xlsx sheet")
+    parser.add_argument("--areas-csv", type=str, default=default_areas, help="Official DrivAerNet Frontal Area CSV")
     parser.add_argument("--output-csv", type=str, default=default_output_csv, help="Consolidated master CSV output path")
     parser.add_argument("--output-json", type=str, default=default_output_json, help="Summary statistics JSON output path")
     
@@ -44,6 +46,7 @@ def main():
     
     features_csv = Path(args.features_csv)
     excel_file = Path(args.excel_file)
+    areas_csv = Path(args.areas_csv)
     output_csv = Path(args.output_csv)
     output_json = Path(args.output_json)
     
@@ -52,6 +55,7 @@ def main():
     print("=" * 60)
     print(f"Features CSV      : {features_csv}")
     print(f"Excel Sheet       : {excel_file}")
+    print(f"Official Areas CSV: {areas_csv}")
     print(f"Output Master CSV : {output_csv}")
     print(f"Output Statistics : {output_json}")
     print("-" * 60)
@@ -63,21 +67,27 @@ def main():
     if not excel_file.exists():
         print(f"[Error] Parametric Excel sheet '{excel_file}' does not exist.")
         sys.exit(1)
+    if not areas_csv.exists():
+        print(f"[Error] Official Areas CSV '{areas_csv}' does not exist.")
+        sys.exit(1)
         
     # 2. Load Data Sources
     print("Loading data sources...", flush=True)
     df_features = pd.read_csv(features_csv)
     df_excel = pd.read_excel(excel_file)
+    df_areas = pd.read_csv(areas_csv)
     
     # 3. ID Sanitization and Normalization
     # Trim whitespaces, enforce uppercase, and remove suffixes
     df_features["id_clean"] = df_features["id"].astype(str).str.strip().str.upper().str.replace("_NORM", "")
     df_excel["id_clean"] = df_excel["Experiment"].astype(str).str.strip().str.upper().str.replace("_NORM", "")
+    df_areas["id_clean"] = df_areas["Car Design"].astype(str).str.strip().str.upper().str.replace("_NORM", "")
     
     # 4. Multi-table Merging
     print("Performing multi-table joins...", flush=True)
-    # Merge with Parametric Excel sheet
+    # Merge with Parametric Excel sheet and Official Areas CSV
     df_final = pd.merge(df_features, df_excel, on="id_clean", suffixes=("", "_excel"))
+    df_final = pd.merge(df_final, df_areas[["id_clean", "Frontal Area (m²)"]], on="id_clean", how="left")
     
     record_count = len(df_final)
     print(f"Successfully joined dataset. Merged record count: {record_count}")
@@ -87,16 +97,23 @@ def main():
     # Target values: Extract Cd natively from the master Excel
     df_final["cd"] = df_final["Average Cd"]
     
-    # Drag Area Index: Cd * Frontal Area (essential physical metric)
+    # Use official physical frontal area (in m²)
+    df_final["frontal_area"] = df_final["Frontal Area (m²)"]
+    
+    # Drag Area Index: Cd * Frontal Area (true physical metric in m²)
     df_final["drag_area"] = df_final["cd"] * df_final["frontal_area"]
     
-    # Configuration code extraction (e.g. F_S_WWC_WM)
+    # Configuration code extraction (e.g. F_S_WWC_WM, E_S_WWC_WM, N_S_WWC_WM)
     df_final["config"] = df_final["id_clean"].apply(lambda x: "_".join(x.split("_")[:-1]))
+    df_final["body_type"] = df_final["config"].apply(lambda c: c.split("_")[0] if isinstance(c, str) and len(c)>0 else "F")
+    body_type_map = {'F': 0, 'E': 1, 'N': 2}
+    df_final["body_type_idx"] = df_final["body_type"].map(body_type_map).fillna(0).astype(int)
     
     # 6. Inject relative paths for PyTorch dataloaders
-    df_final["raw_stl_path"] = df_final["id_clean"].apply(lambda x: f"raw_stl/F_S_WWC_WM/{x}.stl")
-    df_final["normalized_stl_path"] = df_final["id_clean"].apply(lambda x: f"normalized/F_S_WWC_WM/{x}_norm.stl")
-    df_final["pointcloud_path"] = df_final["id_clean"].apply(lambda x: f"pointclouds/F_S_WWC_WM/{x}_pc.ply")
+    df_final["raw_stl_path"] = df_final.apply(lambda row: f"raw_stl/{row['config']}/{row['id_clean']}.stl", axis=1)
+    df_final["normalized_stl_path"] = df_final.apply(lambda row: f"normalized/{row['config']}/{row['id_clean']}_norm.stl", axis=1)
+    df_final["pointcloud_path"] = df_final.apply(lambda row: f"pointclouds/{row['config']}/{row['id_clean']}_pc.ply", axis=1)
+    df_final["occupancy_path"] = df_final.apply(lambda row: f"occupancy/{row['config']}/{row['id_clean']}_occ.npz", axis=1)
     
     # 7. Deterministic Train/Val/Test Split (80/10/10)
     print("Executing deterministic train/val/test splits (80/10/10)...", flush=True)
@@ -137,11 +154,11 @@ def main():
     ]
     
     base_cols = [
-        "id", "config", "split", "cd", "drag_area", 
+        "id", "config", "body_type", "body_type_idx", "split", "cd", "drag_area", 
         "Average Cl", "Average Cl_f", "Average Cl_r",
         "frontal_area", "convex_hull_volume", "bbox_volume", 
         "length_x", "width_y", "height_z",
-        "raw_stl_path", "normalized_stl_path", "pointcloud_path"
+        "raw_stl_path", "normalized_stl_path", "pointcloud_path", "occupancy_path"
     ]
     
     final_cols = base_cols + param_cols

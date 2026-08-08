@@ -171,7 +171,10 @@ def main():
         gc.collect()
     # Compile report and export
     df_report = pd.DataFrame(records)
-    df_report.to_csv(output_csv, index=False)
+    if output_csv.exists():
+        df_report.to_csv(output_csv, mode='a', header=False, index=False)
+    else:
+        df_report.to_csv(output_csv, index=False)
     
     print("-" * 60)
     print("Inspection Completed Successfully!")

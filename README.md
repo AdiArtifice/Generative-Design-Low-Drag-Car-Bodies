@@ -1,14 +1,14 @@
 # Executive Summary
 
-This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** with associated drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, **occupancy grid preprocessing**, and **metadata integration**. We scaled our implementation from the initial **100-car local sandbox** to the **full 692-car configuration subset (`F_S_WWC_WM`)** of the DrivAerNet++-style dataset on the Camber Cloud. The **Triplane VAE** has been successfully trained for 80 epochs on a Camber GPU, learning a robust 3D shape latent space. The README below outlines the project overview, goals, dataset details, environment setup, preprocessing steps, and modeling recipes. It is structured for clarity to guide development and automation.
+This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** with associated drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, **occupancy grid preprocessing**, **metadata integration**, and a **Conditional Triplane VAE (C-VAE)** architecture. We scaled our implementation from an initial single-configuration sandbox (`F_S_WWC_WM`) to a 7-configuration streaming preprocessing workflow (`E_S_WW_WM`, `E_S_WWC_WM`, `F_S_WWC_WM`, `F_S_WWS_WM`, `N_S_WW_WM`, `N_S_WWC_WM`, `N_S_WWS_WM`). The **C-VAE** conditions the PointNet encoder and Triplane decoder on learned label embeddings (`F`, `E`, `N`) to prevent geometric mode collapse across diverse body shapes.
 
 ## Table of Contents
 
 - [Project Overview](#project-overview)  
 - [Goals and Motivation](#goals-and-motivation)  
 - [Dataset Description](#dataset-description)  
-- [Selected Subset Strategy](#selected-subset-strategy)  
-- [Working Configuration (F_S_WWC_WM)](#working-configuration-f_s_wwc_wm)  
+- [Conditional VAE Architecture (C-VAE)](#conditional-vae-architecture-c-vae)  
+- [7-Configuration Preprocessing Strategy](#7-configuration-preprocessing-strategy)  
 - [Hardware Constraints](#hardware-constraints)  
 - [Engineering Principles](#engineering-principles)  
 - [Directory Structure](#directory-structure)  
@@ -32,17 +32,17 @@ This project focuses on **learning geometry-aerodynamics relationships** for car
 
 - **AI-Assisted Design**: Use ML to approximate aerodynamic behavior from geometry, enabling faster iteration.
 - **3D Geometric Data**: Work with raw STL meshes of car models and associated drag coefficients.
-- **Preprocessing**: Rigid pipeline to clean, normalize, and convert meshes into ML-friendly formats.
-- **Generative Goal**: Ultimately train models (e.g. VAEs, diffusion models) to generate new low-drag shapes.
-- **EV-Oriented Focus**: Emphasize fastbacks, smooth underbodies, and wheel covers common in EV design.
+- **Preprocessing**: Rigid, storage-optimized streaming pipeline to clean, normalize, sample, and convert meshes into ML-friendly formats.
+- **Conditional Generative Model**: Train a Conditional Triplane VAE (C-VAE) using dense category embeddings (`F`, `E`, `N`) to generate sharp, category-specific 3D vehicle geometries without mode collapse.
+- **EV-Oriented Focus**: Emphasize fastbacks, estatebacks, and notchbacks with smooth underbodies and wheel covers common in EV design.
 
 ## Goals and Motivation
 
 - **Long-Term Vision**: A system that can ingest 3D car designs and output low-drag variants, reducing development time for EVs.
 - **Geometry-Aerodynamic Surrogate**: Train ML models to predict drag from geometry as a fast surrogate for CFD.
-- **Generative Optimization**: Learn a latent representation of aerodynamic performance to guide shape generation (e.g. latent-space interpolation or diffusion models).
+- **Generative Optimization**: Learn a category-conditioned latent representation of aerodynamic performance to guide shape generation (e.g. latent-space interpolation or shape optimization).
 - **Pipeline Robustness**: Develop reusable, modular preprocessing tools in Python, enabling reproducible data engineering.
-- **Research Inspiration**: This approach is inspired by works like *TripOptimizer* (Triplane VAE for car drag) and DrivAerNet++ dataset projects.
+- **Research Inspiration**: Inspired by works like *TripOptimizer* (Triplane VAE for car drag), C-VAE category conditioning, and DrivAerNet++ dataset projects.
 
 ## Dataset Description
 
