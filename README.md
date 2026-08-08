@@ -1,605 +1,227 @@
 # Executive Summary
 
-This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** with associated drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, **occupancy grid preprocessing**, **metadata integration**, and a **Conditional Triplane VAE (C-VAE)** architecture. We scaled our implementation from an initial single-configuration sandbox (`F_S_WWC_WM`) to a 7-configuration streaming preprocessing workflow (`E_S_WW_WM`, `E_S_WWC_WM`, `F_S_WWC_WM`, `F_S_WWS_WM`, `N_S_WW_WM`, `N_S_WWC_WM`, `N_S_WWS_WM`). The **C-VAE** conditions the PointNet encoder and Triplane decoder on learned label embeddings (`F`, `E`, `N`) to prevent geometric mode collapse across diverse body shapes.
+This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** of 4,857 meshes with associated CFD drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, **occupancy grid preprocessing**, **metadata integration**, and a **Conditional Triplane VAE (C-VAE)** architecture. We scaled our implementation from an initial single-configuration sandbox (`F_S_WWC_WM`, 692 samples) to a complete **7-configuration streaming preprocessing workflow** (`E_S_WW_WM`, `E_S_WWC_WM`, `F_S_WWC_WM`, `F_S_WWS_WM`, `N_S_WW_WM`, `N_S_WWC_WM`, `N_S_WWS_WM`), yielding **4,857 preprocessed vehicle samples**. The **C-VAE** conditions the PointNet encoder and Triplane decoder on learned label embeddings (`Fastback=0`, `Estateback=1`, `Notchback=2`) to prevent geometric mode collapse across diverse body shapes.
+
+---
 
 ## Table of Contents
 
+- [Executive Summary](#executive-summary)
 - [Project Overview](#project-overview)  
 - [Goals and Motivation](#goals-and-motivation)  
 - [Dataset Description](#dataset-description)  
-- [Conditional VAE Architecture (C-VAE)](#conditional-vae-architecture-c-vae)  
 - [7-Configuration Preprocessing Strategy](#7-configuration-preprocessing-strategy)  
-- [Hardware Constraints](#hardware-constraints)  
-- [Engineering Principles](#engineering-principles)  
+- [Conditional VAE Architecture (C-VAE)](#conditional-vae-architecture-c-vae)  
+- [Hardware & Storage Constraints](#hardware--storage-constraints)  
 - [Directory Structure](#directory-structure)  
 - [Dependencies and Setup](#dependencies-and-setup)  
 - [Preprocessing Pipeline](#preprocessing-pipeline)  
   - [Mesh Inspection](#mesh-inspection)  
   - [Mesh Normalization](#mesh-normalization)  
   - [Point-Cloud Sampling](#point-cloud-sampling)  
-  - [Metadata Linking](#metadata-linking)  
+  - [Occupancy Grid Generation](#occupancy-grid-generation)
+  - [Metadata & Split Linking](#metadata--split-linking)  
 - [Scripts and Usage](#scripts-and-usage)  
-- [Unit Tests and Validation](#unit-tests-and-validation)  
-- [Baseline ML Model](#baseline-ml-model)  
+- [Modeling and Baseline Results](#modeling-and-baseline-results)  
 - [Mermaid Diagrams](#mermaid-diagrams)  
-- [File and Naming Conventions](#file-and-naming-conventions)  
-- [Troubleshooting](#troubleshooting)  
-- [Next Steps](#next-steps)  
+- [Future Roadmap](#future-roadmap)  
+
+---
 
 ## Project Overview
 
-This project focuses on **learning geometry-aerodynamics relationships** for car bodies. Rather than relying on heavy CFD, we use data-driven techniques to predict drag (`Cd`) from shape. Key points:
+This project focuses on **learning geometry-aerodynamics relationships** for car bodies. Rather than relying on heavy CFD, we use data-driven generative AI to predict drag (`Cd`) and optimize 3D vehicle geometry. Key points:
 
-- **AI-Assisted Design**: Use ML to approximate aerodynamic behavior from geometry, enabling faster iteration.
-- **3D Geometric Data**: Work with raw STL meshes of car models and associated drag coefficients.
-- **Preprocessing**: Rigid, storage-optimized streaming pipeline to clean, normalize, sample, and convert meshes into ML-friendly formats.
-- **Conditional Generative Model**: Train a Conditional Triplane VAE (C-VAE) using dense category embeddings (`F`, `E`, `N`) to generate sharp, category-specific 3D vehicle geometries without mode collapse.
-- **EV-Oriented Focus**: Emphasize fastbacks, estatebacks, and notchbacks with smooth underbodies and wheel covers common in EV design.
+- **AI-Assisted Design**: Use ML surrogates to approximate aerodynamic behavior directly from 3D geometry, enabling instant shape iteration.
+- **Full 4,857-Sample Dataset**: Scaled across 7 full vehicle configurations covering Fastback, Estateback, and Notchback body types.
+- **Parallel Preprocessing**: Stream-and-delete parallel pipeline to normalize, sample point clouds, and extract occupancy fields while maintaining disk usage below 80 GB.
+- **Conditional Generative Model**: Conditional Triplane VAE (C-VAE) using learned category embeddings (`F`, `E`, `N`) to generate sharp, category-conditioned 3D vehicle geometries without mode collapse.
+- **EV-Oriented Focus**: Focuses on smooth underbodies, wheel covers, and aerodynamic body profiles relevant to electric vehicle design.
+
+---
 
 ## Goals and Motivation
 
-- **Long-Term Vision**: A system that can ingest 3D car designs and output low-drag variants, reducing development time for EVs.
-- **Geometry-Aerodynamic Surrogate**: Train ML models to predict drag from geometry as a fast surrogate for CFD.
-- **Generative Optimization**: Learn a category-conditioned latent representation of aerodynamic performance to guide shape generation (e.g. latent-space interpolation or shape optimization).
-- **Pipeline Robustness**: Develop reusable, modular preprocessing tools in Python, enabling reproducible data engineering.
-- **Research Inspiration**: Inspired by works like *TripOptimizer* (Triplane VAE for car drag), C-VAE category conditioning, and DrivAerNet++ dataset projects.
+- **Long-Term Vision**: A generative system that ingests 3D car designs and synthesizes optimized, low-drag variants while preserving structural volume.
+- **Fast Aerodynamic Surrogate**: Train 3D deep learning models to predict drag from shape as a surrogate for computational fluid dynamics (CFD).
+- **Category-Conditioned Latent Space**: Learn a smooth, interpolatable latent representation conditioned on vehicle class to guide gradient-based shape optimization.
+- **Pipeline Robustness**: Automated, reproducible data engineering in Python for 3D point clouds and implicit occupancy fields.
+
+---
 
 ## Dataset Description
 
-- **Source:** DrivAerNet++-style synthetic dataset for car aerodynamics.
-- **Total Size:** ~300 GB of 3D meshes + metadata.
-- **Mesh Format:** STL (triangular surface meshes).
-- **Configurations:** Multiple body types (Fastback, Estateback, Notchback) and variations (underbody smoothness, wheel covers, wheel models).
-- **Metadata:** Each mesh has an associated **drag coefficient (Cd)** and configuration labels.
-- **Organization:** Original data organized by configuration folders, e.g., `Fastback/Smooth_Underbody/Wheel_Cover/Wheel_Mesh/...`
+- **Source:** DrivAerNet++ 3D vehicle geometry and aerodynamic dataset.
+- **Total Preprocessed Dataset:** **4,857 unique 3D vehicle meshes** across 7 configurations.
+- **Point Cloud Representation:** 50,000 surface points + normal vectors per mesh (`.ply` format).
+- **Occupancy Representation:** 2,048 interior/exterior query points and occupancy labels per mesh (`.npz` format).
+- **Metadata:** Master metadata file (`metadata/metadata.csv`) containing `id`, `config`, `body_type`, `body_type_idx` (`0: F`, `1: E`, `2: N`), `cd`, `drag_area`, and split assignment (`train`, `val`, `test`).
 
-### Relevant Configurations
+### 7 Target Configurations
 
-We focus on the **F_S_WWC_WM** (Fastback, Smooth, Wheel Covers, Wheel Mesh) variant because:
+| Config Code | Body Type | Underbody | Wheel Covers | Wheel Mesh | Sample Count |
+| :--- | :--- | :--- | :--- | :--- | :---: |
+| **`F_S_WWC_WM`** | Fastback (`F`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 692 |
+| **`F_S_WWS_WM`** | Fastback (`F`) | Smooth (`S`) | No (`WWS`) | Yes (`WM`) | 692 |
+| **`E_S_WW_WM`** | Estateback (`E`) | Smooth (`S`) | Standard (`WW`) | Yes (`WM`) | 692 |
+| **`E_S_WWC_WM`** | Estateback (`E`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 692 |
+| **`N_S_WW_WM`** | Notchback (`N`) | Smooth (`S`) | Standard (`WW`) | Yes (`WM`) | 692 |
+| **`N_S_WWC_WM`** | Notchback (`N`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 692 |
+| **`N_S_WWS_WM`** | Notchback (`N`) | Smooth (`S`) | No (`WWS`) | Yes (`WM`) | 707 |
+| **Total** | | | | | **4,857** |
 
-- **Fastbacks** generally yield low drag (common EV silhouette).  
-- **Smooth underbody** is realistic for EV battery layouts (flat belly for aerodynamics).  
-- **Wheel covers & models** further reduce turbulence around wheels.  
+---
 
-This subset is **representative** of low-drag EV designs.
+## Dataset Split Statistics
 
-## Local Subset vs. Cloud Scale Strategy
+The master dataset split is deterministically balanced as follows:
 
-To manage local hardware constraints and optimize development speed, we adopted a staged scaling strategy:
+- **Train Set (80%):** 3,885 vehicles
+- **Validation Set (10%):** 485 vehicles
+- **Test Set (10%):** 487 vehicles
+- **Point Cloud Inputs:** 2,048 points sampled dynamically per item during training.
+- **Occupancy Inputs:** 2,048 query 3D points paired with binary occupancy labels (0/1).
 
-- **Local Sandbox (100 Cars):** Prototyped the inspection, normalization, point-cloud sampling, and baseline model architectures (PointNet and PointNet-VAE) using a balanced, stratified 100-car subset of the `F_S_WWC_WM` configuration.
-- **Camber Cloud Scale (692 Cars):** Once the architectures were validated locally, we migrated the pipeline to the Camber Cloud to process the **entire 692-car configuration subset** of `F_S_WWC_WM`.
-- **CFD Ingestion:** Fused continuous CAD shape parameters and drag results (`Average Cd`, `drag_area`) directly from the master `DrivAerNet_ParametricData (2).xlsx` sheet.
-- **Storage Optimization:** Preprocessed raw watertight STLs into highly compressed occupancy grids (`.npz` format) and `.ply` point clouds, then purged the 48 GB STL raw files to keep Stash storage utilization extremely efficient (<3% of quota).
+---
 
-```text
-Dataset Split Stats (692 Cars total):
-- Train Set: 553 cars (80%)
-- Val Set: 69 cars (10%)
-- Test Set: 70 cars (10%)
-- Inputs: 50,000 PLY Point Cloud points, 2,048 raycast query points (for VAE)
-```
+## Conditional VAE Architecture (C-VAE)
 
-## Working Configuration (F_S_WWC_WM)
+To prevent geometric blur when generating vastly different car shapes (e.g., Estateback vs. Fastback vs. Notchback), we updated our Triplane VAE to a **Conditional Triplane VAE (C-VAE)**:
 
-**Code:** `F_S_WWC_WM`  
-**Meaning:** Fastback + Smooth underbody + Wheel Covers + Wheel Mesh
+1. **Category Embedding:** `nn.Embedding(num_classes=3, embed_dim=16)` maps `class_idx` (`0: Fastback`, `1: Estateback`, `2: Notchback`) into a 16-dimensional vector $c_{emb}$.
+2. **Conditioned Encoder:** PointNet encoder concatenates $c_{emb}$ with global max-pooled features (`512 + 16 = 528`) before outputting latent distribution parameters $\mu$ and $\sigma$.
+3. **Conditioned Decoder:** Triplane decoder concatenates $c_{emb}$ with the 256-D latent vector $z$ (`256 + 16 = 272`) to generate spatial feature grids ($64 \times 64 \times 16$) for XY, XZ, and YZ planes.
+4. **Implicit Occupancy Decoder:** Queries spatial coordinates $(x,y,z)$ from the triplane grids to predict inside/outside occupancy probabilities.
 
-**Rationale:**  
-- *Fastback:* Known to minimize rear-flow separation.  
-- *Smooth underbody:* Reduces undercarriage drag (common in EVs).  
-- *Wheel covers:* Reduce turbulence around wheels, lowering drag.  
-- *Wheel mesh:* Uses realistic wheel geometry.
+---
 
-This configuration is **aerodynamically efficient** and **EV-relevant**, making it ideal for low-drag design studies.
+## Hardware & Storage Constraints
 
-## Hardware Constraints
+- **Storage Policy ("Stream-and-Delete"):** Original raw STL files total hundreds of gigabytes. To maintain disk usage under 80 GB on local drives, raw STL files are streamed, processed into `.ply` point clouds and `.npz` occupancies in chunks of 50, and raw STLs are purged immediately.
+- **Training Requirements:** 
+  - **Local CPU:** Supports `--smoke_test` for rapid code verification.
+  - **Cloud/Local GPU:** Model trained using CUDA (`--batch_size 16` to `32`). Runs on GPUs with $\ge 4\text{ GB}$ VRAM (NVIDIA Titan Xp, T4, L4).
 
-- **Local Development:** Consumer-grade laptop/desktop (e.g., 16–32GB RAM, mid-tier GPU/CPU).
-- **No HPC/Cloud CFD:** Full CFD simulations are too heavy.  
-- **Subset Workflow:** Emphasize lightweight preprocessing and small-batch experiments.  
-- **Memory Management:** Use point clouds instead of voxel grids to reduce memory.  
-- **Batch Processing:** Process meshes one-by-one or in small batches to avoid running out of memory.  
-
-**Strategy:** Build pipeline tools that can scale (use numpy/PyTorch, efficient libraries), but test on small data first.
-
-## Engineering Principles
-
-- **Immutability of Raw Data:** Never alter original STL files. Always copy before processing.
-- **Reproducibility:** All preprocessing steps automated via scripts (no manual editing). Use fixed random seeds for sampling.
-- **Modularity:** Each preprocessing task (inspection, normalization, sampling) is its own script or function.
-- **Validation:** Check mesh integrity early (watertightness, consistent normals, reasonable scale).
-- **Simplicity First:** Avoid complex optimization or generative modeling until the dataset pipeline is rock-solid.
-- **Logging:** Maintain logs/CSV reports of each step (e.g., mesh quality stats).
+---
 
 ## Directory Structure
 
 ```plaintext
 local_subset/
 │
-├── raw_stl/
-│   └── fastback_smooth_wheelcovers/    # Raw STL input files
-│       ├── car_0001.stl
-│       ├── car_0002.stl
-│       └── ... (100 files)
+├── pointclouds/                       # Output: 50k sampled surface point clouds (PLY)
+│   ├── E_S_WWC_WM/
+│   ├── E_S_WW_WM/
+│   ├── F_S_WWC_WM/
+│   ├── F_S_WWS_WM/
+│   ├── N_S_WWC_WM/
+│   ├── N_S_WWS_WM/
+│   └── N_S_WW_WM/
 │
-├── normalized/                        # Output: normalized, centered STL
-│   └── fastback_smooth_wheelcovers/
-│       ├── car_0001_norm.stl
-│       ├── car_0002_norm.stl
-│       └── ...
-│
-├── pointclouds/                       # Output: sampled point clouds (PLY or NPY)
-│   └── fastback_smooth_wheelcovers/
-│       ├── car_0001_pc.ply
-│       ├── car_0002_pc.ply
-│       └── ...
+├── occupancy/                         # Output: implicit query points & labels (NPZ)
+│   ├── E_S_WWC_WM/
+│   ├── E_S_WW_WM/
+│   ├── F_S_WWC_WM/
+│   ├── F_S_WWS_WM/
+│   ├── N_S_WWC_WM/
+│   ├── N_S_WWS_WM/
+│   └── N_S_WW_WM/
 │
 ├── metadata/
-│   ├── metadata.csv                   # Combined dataset CSV (ID, Cd, config, etc.)
-│   └── ... (any additional CSVs)
+│   ├── metadata.csv                   # Master dataset CSV (4,857 rows, split, class_idx, Cd)
+│   ├── computed_features.csv          # Bounding box dimensions & frontal areas
+│   └── target_scales.json             # Normalization statistics (Cd & drag_area)
 │
-├── notebooks/                         # Jupyter notebooks (analysis, demos)
-│   ├── exploration.ipynb
-│   └── ...
+├── src/                               # Core Python library
+│   ├── dataset.py                     # VehicleOccupancyDataset & VehiclePointCloudDataset
+│   └── models/
+│       ├── triplane.py                # Conditional Triplane VAE (TriplaneVAE)
+│       ├── vae.py                     # Conditional PointNet VAE (PointNetVAE)
+│       ├── pointnet.py                # 3D PointNet Drag Regressor
+│       └── latent_regressor.py        # MLP Latent Drag Regressor
 │
-└── scripts/                           # Python preprocessing scripts
-    ├── inspect_meshes.py
-    ├── normalize_mesh.py
-    ├── sample_pointcloud.py
-    ├── link_metadata.py
-    ├── unit_tests.py
-    └── ... 
+└── scripts/                           # Execution & orchestration scripts
+    ├── preprocess_config_batch.py     # Orchestrator for stream-and-delete batching
+    ├── preprocess_mesh_combined.py    # Parallel worker script (mesh -> PLY + NPZ)
+    ├── link_metadata.py               # Metadata builder & 80/10/10 split generator
+    └── train_triplane.py              # C-VAE PyTorch training script
 ```
 
-**Table: Directory Structure**
-
-| Path                                        | Description                                   |
-|---------------------------------------------|-----------------------------------------------|
-| `raw_stl/fastback_smooth_wheelcovers/`      | Raw input STL mesh files (F_S_WWC_WM subset)  |
-| `normalized/fastback_smooth_wheelcovers/`   | Output: translated/scaled STL meshes          |
-| `pointclouds/fastback_smooth_wheelcovers/`  | Output: sampled point cloud files (PLY/NPY)   |
-| `metadata/metadata.csv`                     | Master metadata (ID, Cd, config, etc.)        |
-| `scripts/`                                  | Preprocessing scripts (python modules)        |
-| `notebooks/`                                | Analysis and demo notebooks                   |
+---
 
 ## Dependencies and Setup
 
-Install required Python libraries. This project uses Python 3.8+ and pip or conda:
-
 ```bash
-# Create environment (recommended)
+# Create environment
 conda create -n aerodesign python=3.10
 conda activate aerodesign
 
-# Or use pip in system environment
-pip install --upgrade pip
-
-# Install core libraries
-pip install numpy pandas trimesh
-
-# For point-cloud operations
-pip install open3d
-
-# For ML (if training)
-pip install torch torchvision
-
-# (Optional) OpenFOAM (via apt-get or Docker) for later CFD integration
+# Install dependencies
+pip install numpy pandas trimesh open3d torch torchvision matplotlib pytest
 ```
 
-- **`numpy`, `pandas`**: Data handling, CSV.
-- **`trimesh`**: Mesh I/O and analysis.
-- **`open3d`**: 3D processing (mesh normals, point cloud sampling, visualization).
-- **`torch`/`torchvision`**: For baseline ML models (PointNet/PointNet++).
-- **CI/Testing**: `pytest` and `flake8` or `pre-commit` (for unit tests).
-
-Include exact commands in documentation:
-
-```bash
-pip install numpy pandas trimesh open3d torch torchvision pytest flake8
-```
+---
 
 ## Preprocessing Pipeline
 
-The pipeline consists of sequential steps transforming raw STL to ML-ready datasets:
-
 ```mermaid
 graph LR
-    raw("Raw STL Meshes") --> inspect["Mesh Inspection"]
-    inspect --> clean["Mesh Cleaning/Validation"]
-    clean --> normalize["Geometry Normalization"]
-    normalize --> sample["Point Cloud Sampling"]
-    sample --> link["Metadata Linking"]
-    link --> mlready["ML-ready Dataset"]
-    mlready --> baseline["Baseline ML Models"]
-    baseline --> latent["Latent Geometry Learning"]
-    latent --> generative["Generative Shape Optimization"]
+    raw("Raw STL Stream") --> inspect["Mesh Validation"]
+    inspect --> normalize["Unit Normalization"]
+    normalize --> sample["Point Cloud (50k PLY)"]
+    sample --> occ["Occupancy Sampling (NPZ)"]
+    occ --> purge["Purge Raw/Norm STLs"]
+    purge --> link["Link Metadata & Split"]
+    link --> mlready["Master Dataset (4,857 Samples)"]
 ```
 
-Each stage is implemented by scripts/modules:
+1. **Mesh Validation:** Verifies face orientation and watertightness.
+2. **Normalization:** Translates center-of-mass to origin `(0,0,0)` and scales bounding box max dimension to `1.0`.
+3. **Point Cloud Sampling:** Samples 50,000 points with normals on the mesh surface.
+4. **Occupancy Sampling:** Samples interior/exterior points relative to the mesh surface.
+5. **Storage Cleanup:** Deletes raw and normalized STL files to preserve disk space.
+6. **Metadata & Split Generation:** Constructs `metadata/metadata.csv` with class indices and 80/10/10 split allocations.
 
-1. **Mesh Inspection** (`inspect_meshes.py`)  
-2. **Mesh Cleaning/Validation** (optional fills and fixes)  
-3. **Mesh Normalization** (`normalize_mesh.py`)  
-4. **Point Cloud Sampling** (`sample_pointcloud.py`)  
-5. **Metadata Linking** (`link_metadata.py`)  
-6. **(Later)** ML modeling and generation.
-
-Detailed steps:
-
-### Mesh Inspection
-
-**Goal:** Ensure STL meshes are valid (no holes, correct normals, consistent scaling). Save reports.
-
-- **Load Mesh:** Use `trimesh` (e.g., `trimesh.load('file.stl', force='mesh')`).  
-- **Check Watertight:** `mesh.is_watertight` (returns `True` if closed).  
-- **Check Manifold:** Ensure no duplicated or isolated faces.  
-- **Check Normals:** If available, use `mesh.fix_normals()` to orient normals outward.  
-- **Scale Inspection:** Compute `mesh.extents` or bounding box to see scale anomalies.  
-- **Logging:** Write CSV with fields like *ID, is_watertight, face_count, bounds_min, bounds_max*.
-
-Example code snippet:
-
-```python
-import trimesh, pandas as pd
-records = []
-for file in pathlib.Path("raw_stl/fastback_smooth_wheelcovers").iterdir():
-    mesh = trimesh.load_mesh(str(file), process=False)
-    record = {
-        "id": file.stem,
-        "is_watertight": mesh.is_watertight,
-        "num_faces": len(mesh.faces),
-        "bounds_min": mesh.bounds[0].tolist(),
-        "bounds_max": mesh.bounds[1].tolist()
-    }
-    # Fix normals if needed
-    if not mesh.is_winding_consistent:
-        mesh.fix_normals()
-    records.append(record)
-df = pd.DataFrame(records)
-df.to_csv("metadata/mesh_inspection_report.csv", index=False)
-```
-
-Run via CLI:
-
-```bash
-python scripts/inspect_meshes.py \
-    --input raw_stl/fastback_smooth_wheelcovers/ \
-    --output metadata/mesh_inspection_report.csv
-```
-
-### Mesh Cleaning/Validation
-
-If inspection finds issues:
-
-- **Fill Holes:** Use `trimesh.repair.fill_holes(mesh)` to attempt closing small gaps.  
-- **Remove Degenerate Faces:** `mesh.remove_unreferenced_vertices()`, `mesh.remove_degenerate_faces()`.  
-- **Normals:** After cleaning, call `mesh.fix_normals()` again.  
-- **Re-check:** Confirm `is_watertight` improved.
-
-Example (within `inspect_meshes.py` after loading):
-
-```python
-if not mesh.is_watertight:
-    trimesh.repair.fill_holes(mesh)
-if mesh.is_watertight:
-    status = "fixed"
-else:
-    status = "warning"
-record["status"] = status
-```
-
-Update log to note any fixes.
-
-### Mesh Normalization
-
-**Goal:** Center and scale each mesh for consistent coordinates.
-
-- **Centering:** Translate so center-of-mass (or bounding-box center) is at `(0,0,0)`.  
-- **Scaling:** Option 1: Scale so the largest dimension = 1.0 (unit bounding box).  
-- **Orientation:** Ensure consistent orientation (if needed align principal axes, though not always required for car bodies).
-- **Save:** Write normalized mesh to `normalized/` directory.
-
-Example using `trimesh`:
-
-```python
-import trimesh
-mesh = trimesh.load_mesh("raw_stl/fastback_smooth_wheelcovers/car_0001.stl", process=False)
-# Center to origin
-centroid = mesh.centroid
-mesh.apply_translation(-centroid)
-# Uniform scale to max dimension = 1
-scale_factor = 1.0 / max(mesh.extents)
-mesh.apply_scale(scale_factor)
-# Optionally rotate to align (skipped here)
-trimesh.exchange.export.export_mesh(mesh, 'normalized/fastback_smooth_wheelcovers/car_0001_norm.stl')
-```
-
-Ensure transformation is **deterministic** (no randomness) so repeated runs yield identical meshes.
-
-CLI command:
-
-```bash
-python scripts/normalize_mesh.py \
-    --input raw_stl/fastback_smooth_wheelcovers/ \
-    --output normalized/fastback_smooth_wheelcovers/
-```
-
-### Point-Cloud Sampling
-
-**Goal:** Convert each normalized mesh into a point cloud (approx. 50,000 points).
-
-- **Method:** Use **farthest point sampling (FPS)** and/or **uniform sampling**.
-- **Tools:** `Open3D` provides `sample_points_uniformly()`. For FPS, use `point_cloud.farthest_point_down_sample(n)`.
-- **Normal Estimation:** Optionally compute per-point normals if needed by ML model.
-- **Save:** Write point cloud to file (`.ply` or `.xyz`).
-
-Example with Open3D:
-
-```python
-import open3d as o3d
-
-mesh = o3d.io.read_triangle_mesh("normalized/fastback_smooth_wheelcovers/car_0001_norm.stl")
-pcd = mesh.sample_points_uniformly(number_of_points=50000)  # uniform sampling
-# For FPS (if needed):
-# pcd = o3d.geometry.PointCloud(pcd).farthest_point_down_sample(50000)
-
-o3d.io.write_point_cloud("pointclouds/fastback_smooth_wheelcovers/car_0001_pc.ply", pcd)
-```
-
-We choose *50,000 points per mesh* (common in literature). This balances detail vs size.
-
-CLI command:
-
-```bash
-python scripts/sample_pointcloud.py \
-    --input normalized/fastback_smooth_wheelcovers/ \
-    --output pointclouds/fastback_smooth_wheelcovers/ \
-    --num_points 50000
-```
-
-### Metadata Linking
-
-**Goal:** Compile a unified CSV linking geometry files to Cd and config.
-
-- **Input:** Existing metadata (drag coefficients) and file IDs.
-- **Schema:** A CSV with columns such as:
-  - `id`: unique mesh identifier (e.g., `car_0001`)  
-  - `config`: configuration code (e.g., `F_S_WWC_WM`)  
-  - `cd`: drag coefficient value  
-  - other parameters (e.g., frontal area if available)
-- **Output:** `metadata/metadata.csv`.
-
-**Table: Metadata CSV Schema**
-
-| Column      | Description                   | Example      |
-|-------------|-------------------------------|--------------|
-| `id`        | Mesh identifier (no extension) | `car_0001`  |
-| `config`    | Configuration code            | `F_S_WWC_WM` |
-| `cd`        | Drag coefficient (Cd)         | `0.235`      |
-| `source`    | Original dataset reference    | `DrivAerNet++` |
-| `notes`     | (Optional) extra info         | `balanced subset` |
-
-Example linking script usage (pseudo-code):
-
-```python
-import pandas as pd
-
-# Existing drag values
-df_drag = pd.read_csv("metadata/drags.csv")  # contains id, cd
-df_drag['config'] = 'F_S_WWC_WM'
-df_drag.to_csv("metadata/metadata.csv", index=False)
-```
-
-Alternatively, merge with inspection report:
-
-```bash
-python scripts/link_metadata.py \
-    --drag_csv metadata/drags.csv \
-    --inspect_report metadata/mesh_inspection_report.csv \
-    --output metadata/metadata.csv
-```
+---
 
 ## Scripts and Usage
 
-All preprocessing logic is implemented in **`scripts/`**:
-
-- `inspect_meshes.py`: Check mesh quality; outputs `mesh_inspection_report.csv`.
-- `normalize_mesh.py`: Center and scale meshes; outputs normalized STL.
-- `sample_pointcloud.py`: Generate point clouds; outputs PLY files.
-- `link_metadata.py`: Assemble the metadata CSV.
-
-Each script should have a clear CLI interface with `argparse`. For example, `normalize_mesh.py` might be invoked as:
-
+### 1. Preprocess Single Configuration or Full Batch
 ```bash
-python scripts/normalize_mesh.py \
-    --input raw_stl/fastback_smooth_wheelcovers/ \
-    --output normalized/fastback_smooth_wheelcovers/
+python scripts/preprocess_config_batch.py \
+    --stl-dir "G:\.shortcut-targets-by-id\1WOsw0v1GPcX8lMXMErBMlQYwLrQKF3pQ\Main Project Resource\3D meshes of EV cars\N_S_WWS_WM" \
+    --config-code "N_S_WWS_WM" \
+    --chunk-size 50 \
+    --num-workers 4
 ```
 
-Each script should log progress (print or to a log file) and handle errors gracefully (e.g., skip bad files with a warning).
+### 2. Train Conditional Triplane VAE (C-VAE)
+```bash
+# Fast CPU Smoke-Test
+python scripts/train_triplane.py --smoke_test
 
-## Unit Tests and Validation
-
-Use **pytest** for automated tests:
-
-- **Mesh Tests:** For a small sample mesh, test that `normalize_mesh.py` actually centers and scales to unit box.
-- **Point Count Test:** Verify `sample_pointcloud.py` produces exactly `N` points.
-- **Determinism:** Set `np.random.seed(0)` and test that repeated sampling yields identical output file.
-- **File Presence:** Test that scripts create expected output files and directories.
-- **Example Pytest (in `scripts/unit_tests.py`):**
-  ```python
-  import numpy as np
-  import open3d as o3d
-  from scripts.sample_pointcloud import sample_mesh
-  
-  def test_sample_count():
-      # Create a simple mesh (unit cube)
-      mesh = o3d.geometry.TriangleMesh.create_box()
-      pcd = mesh.sample_points_uniformly(number_of_points=10)
-      assert len(np.asarray(pcd.points)) == 10
-  ```
-
-Integrate with CI (e.g., GitHub Actions):
-
-```yaml
-# .github/workflows/ci.yml
-name: CI
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-      - name: Install Dependencies
-        run: pip install numpy pandas trimesh open3d pytest
-      - name: Run Tests
-        run: pytest scripts/unit_tests.py
+# Full GPU Training (e.g. NVIDIA L4 / T4 / Titan Xp)
+python scripts/train_triplane.py --epochs 20 --batch_size 16 --lr 1e-3 --beta 0.005
 ```
-
-## Modeling and Deep Learning Baselines (Phases 1-3)
-
-We implemented a three-phase "Baseline-First" modeling strategy to prove the value of spatial 3D learning over flat parametric specifications.
-
-### Phase 1: Tabular Baseline Benchmark
-- **Goal:** Establish a baseline prediction performance using classical ML on engineered bounding box features and continuous shape parameters.
-- **Script:** [tabular_baseline.py](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/scripts/tabular_baseline.py)
-- **Features:** 23 shape parameters + 6 geometric dimensions (Volume, Frontal Area, etc.) = 29 total features.
-- **Results:** Classical models overfit training data quickly and hit a performance ceiling on the Test set:
-  - **Random Forest:** Test $R^2 \approx 0.533$ (target: $C_d$), $R^2 \approx 0.492$ (target: `drag_area`)
-  - **Gradient Boosting:** Test $R^2 \approx 0.553$ (target: $C_d$), $R^2 \approx 0.575$ (target: `drag_area`)
-- **Key Finding:** Flat list of shape parameters fails to capture spatial context, setting a hard accuracy ceiling at ~55%.
-
-### Phase 2: PyTorch Dataset Engine
-- **Goal:** Develop a robust deep learning data loader pipeline for 3D point clouds.
-- **Script:** [dataset.py](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/src/dataset.py)
-- **Features:** 
-  - Dynamic on-the-fly random downsampling from 50,000 points to 2,048 points for CPU-compatible training.
-  - Z-score target standardization using stats stored in `metadata/target_scales.json`.
-  - Point cloud shapes formatted as `[Batch, 6, NumPoints]` (X, Y, Z coordinates + outward normal vectors $N_x, N_y, N_z$).
-
-### Phase 3: 3D PointNet Regressor
-- **Goal:** Construct a deep learning architecture that directly processes 3D geometry to regress aerodynamic properties.
-- **Model:** [pointnet.py](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/src/models/pointnet.py)
-- **Training Script:** [train_pointnet.py](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/scripts/train_pointnet.py)
-- **Architecture Details:**
-  - Shared-weight 1D CNNs mapping inputs `[6, N]` $\rightarrow$ `[64, N]` $\rightarrow$ `[128, N]` $\rightarrow$ `[512, N]`.
-  - Global Max Pooling collapses spatial coordinates into a global shape representation of shape `[512]`.
-  - MLP Regression Head (`512` $\rightarrow$ `256` $\rightarrow$ `64` $\rightarrow$ `1`) with dropout (0.3) and batch normalization to predict `drag_area`.
-- **Results:**
-  - Trained for only 20 epochs on CPU with aggressive 2,048-point downsampling.
-  - **PointNet Regressor:** Test $R^2 = 0.563$ (target: `drag_area`).
-  - **Key Finding:** PointNet immediately matched the tabular baseline's performance ceiling with minimal training and points. This proves its spatial capacity to understand 3D car shapes directly.
-
-### Phase 4: Triplane VAE Generative Model
-- **Goal:** Learn a continuous 3D vehicle latent representation that allows reconstructing watertight car bodies and performing gradient descent optimization.
-- **Model:** [models.py](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/src/models/models.py) (implements Triplane encoder, 3D CNN, and MLP occupancy decoder).
-- **Training Script:** [train_triplane.py](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/scripts/train_triplane.py) (cloud job script: [train_vae_cloud.sh](file:///c:/Aditya%20Files/Projects/Generative%20Design%20for%20Low-Drag%20Car%20Bodies/local%20subset/scripts/train_vae_cloud.sh))
-- **Architecture Details:**
-  - Orthogonal 2D projection planes (XY, YZ, XZ) representation mapping point cloud structures into feature grids of size `[PlaneChannels, PlaneRes, PlaneRes]`.
-  - Triplane Encoder utilizes shared MLP structures to project 3D points to the 2D planes.
-  - Convolutional layers process the planes and compress them into a 256-D latent vector $z$.
-  - Decoder reads query points $(x,y,z)$ and decodes the boundary occupancy state (inside/outside vehicle body).
-- **Results (80 Epochs, GPU):**
-  - **Train Loss:** 0.2967 (Recon BCE: 0.2851, KL Div: 2.3216)
-  - **Val Loss:** 0.2995 (Recon BCE: 0.2882, KL Div: 2.2451)
-  - **Occupancy Reconstruction Accuracy:** **85.79% (Train) / 85.49% (Val)**
-  - **Key Finding:** Low KL-divergence indicates a smooth, highly interpolatable latent space. Excellent agreement between train and validation losses demonstrates a highly generalized latent model.
 
 ---
 
-### Comparison of Performance (Surrogates & Generative Kernels)
+## Modeling and Baseline Results
 
-| Model Pipeline | Model Type | Input Features | Test / Val Score |
-| :--- | :--- | :--- | :---: |
-| **Random Forest** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.4924$ |
-| **Gradient Boosting** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.5751$ |
-| **3D PointNet** | Regressor | Raw 3D Point Cloud (2k points) | Test $R^2 = 0.5633$ |
-| **Triplane VAE** | Generative | Point Cloud + Occupancy Grids | Val Acc = **85.49%** |
-
-
-## Mermaid Diagrams
-
-### Pipeline Flow
-```mermaid
-graph TD
-    A[Raw STL Meshes] --> B[Mesh Inspection]
-    B --> C[Mesh Cleaning & Validation]
-    C --> D[Mesh Normalization]
-    D --> E[Point Cloud Sampling]
-    E --> F[Link Metadata]
-    F --> G[ML-ready Dataset]
-    G --> H[Baseline Model Training & PointNet Regressor]
-    H --> I[Phase 4 Step 1: PointNet-VAE Prototyping on CPU]
-    I --> J[Phase 4 Step 2: Triplane VAE Scaling on GPU]
-```
-
-### Development Timeline
-```mermaid
-gantt
-    title Project Timeline
-    dateFormat  YYYY-MM-DD
-    section Preprocessing
-      Mesh Inspection/Validation    :done,    des1, 2026-05-01, 10d
-      Geometry Normalization       :done,    des2, 2026-05-10, 5d
-      Point Cloud Sampling         :done,    des3, 2026-05-15, 5d
-      Metadata Linking             :done,    des4, 2026-05-20, 2d
-    section Modeling
-      Tabular Baseline (Phase 1)   :done,    des5, 2026-05-22, 5d
-      PyTorch Dataloader (Phase 2) :done,    des6, 2026-05-27, 3d
-      3D PointNet Regressor (Ph 3) :done,    des7, 2026-05-30, 4d
-      Phase 4 Step 1 - PointNet-VAE:done,    des8, 2026-06-03, 2d
-      Phase 4 Step 2 - Triplane VAE:done,    des9, 2026-06-05, 2d
-      Phase 5 - Latent Optimization:active,  des10, 2026-06-05, 7d
-```
-
-## File and Naming Conventions
-
-- **Raw files:** `car_<ID>.stl` (e.g., `car_0001.stl`).
-- **Normalized:** Append `_norm`, e.g., `car_0001_norm.stl`.
-- **Point clouds:** Use `_pc` suffix, e.g., `car_0001_pc.ply`.
-- **Metadata CSV:** `id` column matches filename stem.
-- **Script args:** Should accept `--input` and `--output` directory flags.
-- **Logs:** Save reports in `metadata/` or `logs/` with clear filenames.
-
-## Troubleshooting
-
-- **Memory errors:** Reduce `number_of_points` or process one mesh at a time. Ensure closing files.
-- **Open3D issues:** If `mesh.sample_points_uniformly` fails, update Open3D or simplify mesh (vertex normals required).
-- **Non-manifold mesh:** Try `trimesh.repair.fill_holes()` and `remove_duplicate_faces()`.
-- **Point cloud quality:** Verify point cloud visually (e.g., with `o3d.visualization.draw_geometries` in a notebook).
-- **Version mismatches:** Ensure consistent Open3D/Trimesh versions (use pip freeze for debugging).
-
-## Phase 5: Aerodynamic Optimization in Latent Space (Completed)
-
-We have successfully implemented and executed the shape optimization loop:
-
-1. **Latent Space Drag Regressor**:
-   * Trained a regression model (MLP) on the Camber Cloud GPU to predict the drag area ($C_d A$) directly from the VAE's 256-dimensional latent representation.
-   * **Validation Metrics (Full 69-sample Validation Set):**
-     * Mean Squared Error (MSE): `0.00001356`
-     * Mean Absolute Error (MAE): `0.002942` $m^2$
-     * Mean Absolute Percentage Error (MAPE): `11.58%`
-     * $R^2$ Score: `-0.0278` (Indicating the regressor is predicting near-average values due to the narrow fastback-only variance. This highlights the need for Phase 6's multi-config dataset).
-
-2. **Latent Space Optimization**:
-   * Implemented gradient-based optimization in the 256-D latent space to find a vector $z_{\text{opt}}$ that minimizes drag while enforcing structural volume conservation.
-   * Optimizing the baseline fastback shape `F_S_WWC_WM_164` over 250 steps yielded a **7.27% drag area reduction** (reducing $C_d A$ from `0.0246` to `0.0228`).
-
-3. **Optimized Shape Reconstruction**:
-   * Decoded the optimized latent vector $z_{\text{opt}}$ into watertight, manifold, and physically consistent STL meshes using Marching Cubes.
-   * Volume was conserved extremely well (within 0.05% of the original volume of `0.0652` $m^3$).
+| Model Pipeline | Model Type | Input Features | Test / Val Score | Status |
+| :--- | :--- | :--- | :---: | :---: |
+| **Random Forest** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.4924$ | Baseline |
+| **Gradient Boosting** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.5751$ | Baseline |
+| **3D PointNet** | Regressor | Raw 3D Point Cloud (2k points) | Test $R^2 = 0.5633$ | Baseline |
+| **Triplane VAE** | Generative | Single Config (`F_S_WWC_WM`) | Val Acc = **85.49%** | Completed |
+| **Conditional Triplane VAE (C-VAE)** | Generative | **4,857 Vehicles across 7 Configs** | *Ready for GPU Run* | **Active Architecture** |
 
 ---
 
-## Future Roadmap (Phase 6: Multi-Config Dataset Scaling)
+## Future Roadmap
 
-To resolve the regressor's mode collapse (low correlation / negative $R^2$), future work will expand the training dataset to include a wider variety of vehicle body types (SUVs, Hatchbacks, Sedans, notchbacks).
-
-1. **Diverse Shape Distribution**: Expanding dataset from 692 Fastbacks to over 4,000 configurations will introduce large variations in drag coefficients, forcing the regressor to learn real physical shape-drag correlations.
-2. **Generic Preprocessing Pipeline**: Generalize the current preprocessing pipeline to handle multiple body styles.
-3. **Advanced Generative Optimization**: Scale Triplane VAE training and evaluation to GPU clusters for larger batches and longer training durations.
+1. **Phase 6A: Full Dataset C-VAE Training** — Train the C-VAE on the 4,857-vehicle multi-config dataset using GPU compute (NVIDIA L4 / T4).
+2. **Phase 6B: Latent Drag Regressor Retraining** — Retrain `LatentDragRegressor` on the multi-config latent space $z$ to predict drag coefficients across Fastbacks, Estatebacks, and Notchbacks without mode collapse.
+3. **Phase 6C: Multi-Category Latent Shape Optimization** — Perform gradient-based shape optimization in the conditioned latent space to synthesize low-drag car bodies for specific vehicle classes.
+4. **Phase 7: Physics-Informed AI (NVIDIA Modulus)** — Integrate 3D pressure field predictions to guide aerodynamic shape morphing.
+5. **Phase 8: OpenFOAM Ground-Truth Validation** — Validate AI-designed vehicle geometries with full OpenFOAM CFD simulations.
