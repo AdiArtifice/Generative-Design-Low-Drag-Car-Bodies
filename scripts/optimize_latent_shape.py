@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os
+import json
 import sys
 import argparse
 import random
@@ -15,7 +16,7 @@ from src.models.triplane import TriplaneVAE
 from src.models.latent_regressor import LatentDragRegressor
 from src.dataset import VehiclePointCloudDataset
 
-def extract_mesh(vae, z, output_path, device, grid_res=64, threshold=0.5):
+def extract_mesh(vae, z, output_path, device, grid_res=64, threshold=0.5, c_emb=None):
     # Generates dense grid coordinates
     min_val, max_val = -0.6, 0.6
     x = np.linspace(min_val, max_val, grid_res, dtype=np.float32)
@@ -28,7 +29,7 @@ def extract_mesh(vae, z, output_path, device, grid_res=64, threshold=0.5):
     
     # Inference
     with torch.no_grad():
-        plane_xy, plane_xz, plane_yz = vae.decoder(z)
+        plane_xy, plane_xz, plane_yz = vae.decoder(z, c_emb=c_emb)
         
         batch_size = 16384
         occupancies = []
@@ -90,18 +91,30 @@ def optimize(args):
     
     # 1. Load VAE
     print(f"Loading Triplane VAE from {args.vae_path}...")
-    vae = TriplaneVAE(in_channels=6, latent_dim=256, plane_channels=16, plane_resolution=64).to(device)
     if not os.path.exists(args.vae_path):
         print(f"Error: {args.vae_path} not found.")
         sys.exit(1)
-    vae.load_state_dict(torch.load(args.vae_path, map_location=device))
+        
+    vae_state = torch.load(args.vae_path, map_location=device)
+    has_vae_class_emb = "class_emb.weight" in vae_state
+    num_classes_vae = args.num_classes if has_vae_class_emb else 0
+    embed_dim_vae = args.embed_dim if has_vae_class_emb else 0
+    
+    vae = TriplaneVAE(
+        in_channels=6, 
+        latent_dim=256, 
+        plane_channels=16, 
+        plane_resolution=64, 
+        num_classes=num_classes_vae, 
+        embed_dim=embed_dim_vae
+    ).to(device)
+    vae.load_state_dict(vae_state)
     vae.eval()
     for param in vae.parameters():
         param.requires_grad = False
         
     # 2. Load Latent Regressor
     print(f"Loading Latent Drag Regressor from {args.regressor_path}...")
-    regressor = LatentDragRegressor(latent_dim=256).to(device)
     if not os.path.exists(args.regressor_path):
         # Fallback to smoke model if default file not found and smoke is available
         if args.regressor_path == "models/latent_regressor_best.pth" and os.path.exists("models/latent_regressor_smoke.pth"):
@@ -111,7 +124,17 @@ def optimize(args):
             print(f"Error: {args.regressor_path} not found.")
             sys.exit(1)
             
-    regressor.load_state_dict(torch.load(args.regressor_path, map_location=device))
+    reg_state = torch.load(args.regressor_path, map_location=device)
+    has_reg_class_emb = "class_emb.weight" in reg_state
+    num_classes_reg = args.num_classes if has_reg_class_emb else 0
+    embed_dim_reg = args.embed_dim if has_reg_class_emb else 0
+    
+    regressor = LatentDragRegressor(
+        latent_dim=256, 
+        num_classes=num_classes_reg, 
+        embed_dim=embed_dim_reg
+    ).to(device)
+    regressor.load_state_dict(reg_state)
     regressor.eval()
     for param in regressor.parameters():
         param.requires_grad = False
@@ -144,19 +167,25 @@ def optimize(args):
     
     print(f"Selected baseline car: {baseline_id} with original drag_area = {row['drag_area']:.4f} m^2")
     
-    features, targets = dataset[dataset_idx]
+    features, class_idx, targets = dataset[dataset_idx]
     features = features.unsqueeze(0).to(device)
+    class_idx = class_idx.unsqueeze(0).to(device)
     
     # Extract baseline latent vector (explicitly detached & cloned)
     with torch.no_grad():
-        z_initial, _ = vae.encoder(features)
+        c_emb = vae.class_emb(class_idx) if vae.class_emb is not None else None
+        z_initial, _ = vae.encoder(features, c_emb=c_emb)
         z_initial = z_initial.detach().clone()
         
     # Initial prediction
     with torch.no_grad():
-        initial_pred_drag = regressor(z_initial).item()
+        initial_pred_drag = regressor(z_initial, class_idx=class_idx).item()
         
     print(f"Baseline Predicted Drag Area: {initial_pred_drag:.4f} m^2")
+    
+    # Compute drag floor from dataset (lowest drag the regressor was trained on)
+    drag_floor = valid_df['drag_area'].min()
+    print(f"Dataset drag_area floor: {drag_floor:.4f} m^2 (optimizer will not target below this)")
     
     # 4. Optimization Loop
     z_opt = torch.nn.Parameter(z_initial.clone())
@@ -166,21 +195,30 @@ def optimize(args):
     
     # Export step 0 (baseline)
     print("Exporting initial mesh (Step 0)...")
-    success = extract_mesh(vae, z_opt, "optimization_output/optimized_car_step_0.stl", device)
+    success = extract_mesh(vae, z_opt, "optimization_output/optimized_car_step_0.stl", device, c_emb=c_emb)
     if not success:
         print("[Warning] Initial mesh reconstruction failed.")
+    
+    drag_floor_tensor = torch.tensor(drag_floor, dtype=torch.float32, device=device)
     
     print("\nStarting Latent Space Optimization...")
     for step in range(1, args.steps + 1):
         optimizer.zero_grad()
         
-        pred_drag = regressor(z_opt)
-        similarity_penalty = torch.norm(z_opt - z_initial, p=2)
+        pred_drag = regressor(z_opt, class_idx=class_idx)
+        similarity_penalty = torch.sum((z_opt - z_initial) ** 2)  # Squared L2
         
-        # Loss formula
-        loss = pred_drag + args.lambda_reg * similarity_penalty
+        # Clamp predicted drag to dataset floor — stops gradients below trusted range
+        pred_drag_clamped = torch.clamp(pred_drag, min=drag_floor_tensor)
+        
+        # Loss formula: drag minimization + quadratic proximity penalty
+        loss = pred_drag_clamped + args.lambda_reg * similarity_penalty
         loss.backward()
         optimizer.step()
+        
+        # Clamp latent vector to stay within the training manifold
+        with torch.no_grad():
+            z_opt.data.clamp_(-args.z_clamp, args.z_clamp)
         
         if step % 10 == 0 or step == 1:
             print(f"Step {step:03d} | Loss: {loss.item():.4f} | Drag: {pred_drag.item():.4f} m^2 | Penalty: {similarity_penalty.item():.4f}")
@@ -188,28 +226,49 @@ def optimize(args):
         if step % 50 == 0 or step == args.steps:
             output_path = f"optimization_output/optimized_car_step_{step}.stl"
             print(f"  -> Exporting intermediate mesh: {output_path}")
-            success = extract_mesh(vae, z_opt, output_path, device, grid_res=64, threshold=0.5)
+            success = extract_mesh(vae, z_opt, output_path, device, grid_res=64, threshold=0.5, c_emb=c_emb)
             if not success:
                 print(f"[Warning] Mesh reconstruction failed at step {step}.")
             
     # Calculate final reduction in raw physical units
     with torch.no_grad():
-        final_pred_drag = regressor(z_opt).item()
+        final_pred_drag = regressor(z_opt, class_idx=class_idx).item()
         reduction = (initial_pred_drag - final_pred_drag) / initial_pred_drag * 100 if initial_pred_drag != 0 else 0
         
     print("\nOptimization Complete!")
     print(f"Final Predicted Drag Area: {final_pred_drag:.4f} m^2 (Baseline: {initial_pred_drag:.4f} m^2)")
     print(f"Theoretical Drag Reduction: {reduction:.2f}%")
     print(f"Check the 'optimization_output' folder for STL files.")
+    
+    # Save optimization summary for downstream tools (e.g., visualizer)
+    summary = {
+        "baseline_id": baseline_id,
+        "baseline_body_type": str(row.get('body_type', 'unknown')),
+        "baseline_ground_truth_drag_area": float(row['drag_area']),
+        "baseline_predicted_drag_area": float(initial_pred_drag),
+        "final_predicted_drag_area": float(final_pred_drag),
+        "reduction_percent": float(reduction),
+        "steps": args.steps,
+        "lambda_reg": args.lambda_reg,
+        "lr": args.lr,
+        "z_clamp": args.z_clamp,
+    }
+    summary_path = "optimization_output/optimization_summary.json"
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"Saved optimization summary to {summary_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=250, help="Number of optimization steps")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate for Adam optimizer")
-    parser.add_argument("--lambda_reg", type=float, default=0.001, help="L2 penalty weight to preserve core structure")
-    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best_80.pth", help="Path to pre-trained VAE weights")
-    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best_80.pth", help="Path to trained regressor weights")
+    parser.add_argument("--lambda_reg", type=float, default=0.01, help="Squared-L2 penalty weight to preserve core structure")
+    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best.pth", help="Path to pre-trained VAE weights")
+    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best.pth", help="Path to trained regressor weights")
+    parser.add_argument("--num_classes", type=int, default=3, help="Number of vehicle classes for C-VAE")
+    parser.add_argument("--embed_dim", type=int, default=16, help="Category embedding dimension")
     parser.add_argument("--seed", type=int, default=42, help="Seed for reproducibility")
+    parser.add_argument("--z_clamp", type=float, default=3.0, help="Clamp radius for latent vector (keeps z within training manifold)")
     args = parser.parse_args()
     
     optimize(args)

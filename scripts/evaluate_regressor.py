@@ -28,16 +28,21 @@ def evaluate():
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
     
     # 2. Load Models
-    vae_path = "models/triplane_vae_best_80.pth"
-    regressor_path = "models/latent_regressor_best_80.pth"
+    vae_path = "models/triplane_vae_best.pth"
+    regressor_path = "models/latent_regressor_best.pth"
     
+    if not os.path.exists(vae_path):
+        raise FileNotFoundError(f"Missing {vae_path}")
+    if not os.path.exists(regressor_path):
+        raise FileNotFoundError(f"Missing {regressor_path}")
+        
     print(f"Loading Triplane VAE from {vae_path}...")
-    vae = TriplaneVAE(in_channels=6, latent_dim=256, plane_channels=16, plane_resolution=64).to(device)
+    vae = TriplaneVAE(in_channels=6, latent_dim=256, plane_channels=16, plane_resolution=64, num_classes=3, embed_dim=16).to(device)
     vae.load_state_dict(torch.load(vae_path, map_location=device))
     vae.eval()
     
     print(f"Loading Latent Drag Regressor from {regressor_path}...")
-    regressor = LatentDragRegressor(latent_dim=256).to(device)
+    regressor = LatentDragRegressor(latent_dim=256, num_classes=3, embed_dim=16).to(device)
     regressor.load_state_dict(torch.load(regressor_path, map_location=device))
     regressor.eval()
     
@@ -47,12 +52,14 @@ def evaluate():
     
     print("Running inference on validation set...")
     with torch.no_grad():
-        for point_clouds, targets in val_loader:
+        for point_clouds, class_indices, targets in val_loader:
             point_clouds = point_clouds.to(device)
+            class_indices = class_indices.to(device)
             target_drags = targets["drag_area"].numpy()
             
-            mu, _ = vae.encoder(point_clouds)
-            preds = regressor(mu).squeeze(1).cpu().numpy()
+            c_emb = vae.class_emb(class_indices) if vae.class_emb is not None else None
+            mu, _ = vae.encoder(point_clouds, c_emb=c_emb)
+            preds = regressor(mu, class_idx=class_indices).squeeze(1).cpu().numpy()
             
             y_true.extend(target_drags)
             y_pred.extend(preds)

@@ -13,7 +13,7 @@ class VehiclePointCloudDataset(Dataset):
     and their associated aerodynamic targets (Cd, Drag Area).
     """
     def __init__(self, csv_path="metadata/metadata.csv", scales_path="metadata/target_scales.json", 
-                 split=None, num_points=2048, normalize_targets=True):
+                 split=None, num_points=2048, normalize_targets=True, filter_nan_targets=True):
         """
         Args:
             csv_path (str): Path to master metadata CSV.
@@ -21,11 +21,16 @@ class VehiclePointCloudDataset(Dataset):
             split (str): One of 'train', 'val', 'test', or None for all.
             num_points (int): Number of points to sample dynamically.
             normalize_targets (bool): Whether to normalize targets using target_scales.json stats.
+            filter_nan_targets (bool): Filter out rows where aerodynamic targets (drag_area/cd) are NaN.
         """
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"Metadata file not found at {csv_path}")
             
         self.df = pd.read_csv(csv_path)
+        
+        # Filter rows with NaN aerodynamic targets if required
+        if filter_nan_targets and "drag_area" in self.df.columns:
+            self.df = self.df[self.df["drag_area"].notna() & self.df["cd"].notna()].reset_index(drop=True)
         
         # Filter by split if provided
         if split is not None:
