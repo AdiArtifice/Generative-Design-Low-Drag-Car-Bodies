@@ -98,7 +98,24 @@ iterative refinement (if residual > 0.005 m²)
 
 ---
 
-## 🔴 Phase 8: Physics-Informed AI Integration (NVIDIA Modulus)
+## 🔴 Phase 8: Iterative AI–CFD Closed-Loop Refinement
+**Goal:** Build a dual-mode system where Fast Mode (AI-only, seconds) enables rapid exploration and Physics-Refinement Mode (AI → selective OpenFOAM on champions → evidence accumulation → surrogate correction update → re-optimization) provides CFD-validated shape improvements.
+
+> See [phase8_iterative_cfd_refinement_plan.md](phase8_iterative_cfd_refinement_plan.md) for the detailed implementation plan.
+
+* **What we do:**
+  1. Implement a **CFD evidence store** that persists all CFD results (seeded by Phase 7, grown by refinement sessions).
+  2. Build an **evolving surrogate correction layer** that auto-scales with evidence (identity → affine → per-class affine → local correction as data grows). Not a fixed α, β.
+  3. Create a **refinement loop orchestrator** (`refine_with_cfd.py`) that selectively evaluates only champion geometries via OpenFOAM, accumulates evidence, updates the correction, and re-optimizes.
+  4. Integrate correction into `optimize_latent_shape.py` (backward-compatible: omit `--evidence_store` for raw surrogate).
+  5. Evaluate success by comparing **AI-only vs AI+CFD refinement** using CFD-validated CdA.
+* **CFD selection policy:** Only converged champion geometries are sent to OpenFOAM — never intermediate optimization candidates.
+* **Refinement parameters:** Number of rounds, convergence thresholds, and stopping strategy are **not hardcoded** — they will be determined empirically from Phase 7 results. Configurable hard budget caps (`--max_rounds`, `--max_cfd_hours`) prevent indefinite execution.
+* **Hardware:** Same desktop constraint (i7-12700, 16 GB RAM). CFD remains sparse and resource-bounded.
+
+---
+
+## 🔴 Phase 9: Physics-Informed AI Integration (NVIDIA Modulus)
 **Goal:** Upgrade the aerodynamic evaluator from a scalar regressor to a 3D pressure and velocity field predictor.
 * **What we do:** Integrate PINN (Physics-Informed Neural Network) and Neural Operator surrogates using NVIDIA Modulus to evaluate surface pressure distributions and volumetric velocity fields during latent shape morphing.
 * **Compute Needed:** **Cloud Multi-GPU Cluster**.
