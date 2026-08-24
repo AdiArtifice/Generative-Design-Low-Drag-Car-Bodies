@@ -214,14 +214,16 @@ python scripts/train_triplane.py --epochs 20 --batch_size 16 --lr 1e-3 --beta 0.
 | **Gradient Boosting** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.5751$ | Baseline |
 | **3D PointNet** | Regressor | Raw 3D Point Cloud (2k points) | Test $R^2 = 0.5633$ | Baseline |
 | **Triplane VAE** | Generative | Single Config (`F_S_WWC_WM`) | Val Acc = **85.49%** | Completed |
-| **Conditional Triplane VAE (C-VAE)** | Generative | **4,857 Vehicles across 7 Configs** | *Ready for GPU Run* | **Active Architecture** |
+| **Conditional Triplane VAE (C-VAE)** | Generative | **4,165 Vehicles across 7 Configs** | Val Acc = **80%+** / Latent Regressor $R^2 \sim 0.80+$ | **Completed / Active** |
 
 ---
 
 ## Future Roadmap
 
-1. **Phase 6A: Full Dataset C-VAE Training** — Train the C-VAE on the 4,857-vehicle multi-config dataset using GPU compute (NVIDIA L4 / T4).
-2. **Phase 6B: Latent Drag Regressor Retraining** — Retrain `LatentDragRegressor` on the multi-config latent space $z$ to predict drag coefficients across Fastbacks, Estatebacks, and Notchbacks without mode collapse.
-3. **Phase 6C: Multi-Category Latent Shape Optimization** — Perform gradient-based shape optimization in the conditioned latent space to synthesize low-drag car bodies for specific vehicle classes.
-4. **Phase 7: Physics-Informed AI (NVIDIA Modulus)** — Integrate 3D pressure field predictions to guide aerodynamic shape morphing.
-5. **Phase 8: OpenFOAM Ground-Truth Validation** — Validate AI-designed vehicle geometries with full OpenFOAM CFD simulations.
+1. **🟢 Phase 6C: C-VAE & Drag Regressor Training** *(Completed)* — Trained the C-VAE and Latent Drag Regressor on the multi-config dataset to learn a smooth, category-conditioned shape space and drag surrogate.
+2. **🟢 Phase 6D: Multi-Category Latent Shape Optimization** *(Completed)* — Performed gradient-based shape optimization in the conditioned latent space to synthesize low-drag car bodies with volume constraints.
+3. **🟡 Phase 7: OpenFOAM Ground-Truth CFD Validation & Iterative Refinement** — Validate AI-designed vehicle geometries with OpenFOAM CFD on desktop hardware (i7-12700, 16 GB RAM). Budget: **10–15 selective simulations** (~2M cells, half-car symmetry, steady RANS $k$-$\omega$ SST, ~3–5 hrs each):
+   - **Stage 1 (Mesh Calibration + Validation, ~5–6 runs):** Calibrate against known DrivAerNet $C_dA$ baselines, then validate 3 AI champion geometries. Quantify surrogate error.
+   - **Stage 2 (Affine Surrogate Correction, ~3–4 runs):** Fit $C_dA_{\text{true}} = \alpha \cdot C_dA_{\text{surr}} + \beta$, re-optimize with corrected surrogate, validate corrected champions.
+   - **Stage 3 (Final Closed-Loop Validation, ~2–3 runs):** Final publication-quality validation. One additional correction cycle only if residual $\Delta C_dA > 0.005\text{ m}^2$.
+4. **🔴 Phase 8: Physics-Informed AI Integration (NVIDIA Modulus)** — Integrate 3D pressure field predictions and PINN surrogates to guide fine-grained aerodynamic shape morphing.

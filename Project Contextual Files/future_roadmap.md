@@ -24,32 +24,81 @@ This document outlines the project roadmap following the successful completion o
 
 ---
 
-## 🟡 Next Immediate Step: Phase 6C: C-VAE Training & Drag Regressor Retraining on GPU
-**Goal:** Train the C-VAE and Latent Drag Regressor on the complete 4,165-sample multi-config dataset.
-* **What we do:**
-  1. Train the C-VAE model on GPU (`python scripts/train_triplane.py --epochs 20 --batch_size 16 --lr 1e-3 --beta 0.005`) to learn a smooth, class-conditioned 3D shape space.
-  2. Retrain the `LatentDragRegressor` on the new multi-config latent space $z$ to predict drag coefficients across Fastbacks, Estatebacks, and Notchbacks.
-* **Compute Needed:** **Single GPU (NVIDIA L4 / T4 / Titan Xp)**. 20 epochs will take ~5–12 minutes.
+## 🟢 Completed: Phase 6C: C-VAE Training & Drag Regressor Retraining on GPU
+**Goal:** Train the C-VAE and Latent Drag Regressor on the complete multi-config dataset.
+* **What we did:**
+  1. Trained the C-VAE model on GPU (`triplane_vae_best_80.pth`) across the multi-config dataset to learn a smooth, class-conditioned 3D shape space.
+  2. Retrained the `LatentDragRegressor` (`latent_regressor_best_80.pth`) on the new multi-config latent space $z$ to predict drag coefficients across Fastbacks, Estatebacks, and Notchbacks.
+* **Outcome:** Validated latent representation and high-accuracy drag surrogate model capable of guiding gradient-based shape optimization.
 
 ---
 
-## 🟠 Phase 6D: Multi-Category Latent Shape Optimization
+## 🟢 Completed: Phase 6D: Multi-Category Latent Shape Optimization
 **Goal:** Generate optimized low-drag car bodies across specific vehicle body categories.
+* **What we did:**
+  1. Executed gradient-based latent space optimization (`scripts/optimize_latent_shape.py`) with L2 regularization, latent vector clamping, and volume constraints to minimize predicted drag.
+  2. Extracted watertight STL car bodies from decoded occupancy fields using Marching Cubes (`optimization_output/`).
+  3. Dynamic reporting and shape generation validated without out-of-distribution mode collapse.
+* **Outcome:** Generated physically realistic low-drag vehicle meshes ready for CFD validation.
+
+---
+
+## 🟡 Next Immediate Step: Phase 7: OpenFOAM Ground-Truth CFD Validation & Iterative Refinement
+
+**Goal:** Validate AI-generated low-drag vehicle geometries using OpenFOAM CFD simulations and close the feedback loop to refine the surrogate model.
+
+**Hardware:** HP Pro Tower 280 G9 — Intel i7-12700 (12C/20T), 16 GB RAM, Ubuntu 24.04.
+**CFD Budget:** **10–15 total simulations** (~3–5 hrs each on 8 cores, half-car symmetry, ~2M cells, steady RANS $k$-$\omega$ SST).
+
+> **Design principle:** CFD is selective, not exhaustive. Every simulation must be justified.
+
+### Stage 1: Mesh Calibration + Champion Validation (~5–6 runs)
+```text
+AI optimization (already done)
+      ↓
+OpenFOAM validation (one-way)
+      ↓
+error quantification: CdA_CFD vs CdA_surrogate
+```
 * **What we do:**
-  1. Run gradient-based latent space optimization (`optimize_latent_shape.py`) to minimize predicted drag for target vehicle classes.
-  2. Use Marching Cubes to extract watertight STL car bodies from the optimized decoded occupancy fields.
-  3. Quantify drag reduction percentages while enforcing volume conservation constraints.
+  1. Run 2 known DrivAerNet baseline geometries (with published $C_dA$) to calibrate the mesh setup.
+  2. Validate 3 AI champion geometries (one per body type: Fastback, Estateback, Notchback).
+  3. Quantify surrogate prediction error: $\Delta C_dA = C_dA_{\text{CFD}} - C_dA_{\text{surrogate}}$.
+* **Timeline:** ~1.5 weeks (overnight runs)
+
+### Stage 2: Affine Surrogate Correction + Re-Optimization (~3–4 runs)
+```text
+AI re-optimization (corrected surrogate)
+      ↓
+OpenFOAM feedback
+      ↓
+correct surrogate: CdA_true = α·CdA_surr + β
+```
+* **What we do:**
+  1. Fit an affine correction model $C_dA_{\text{true}} = \alpha \cdot C_dA_{\text{surrogate}} + \beta$ using the 3–5 Stage 1 data points.
+  2. Re-run latent space optimization with the bias-corrected drag area predictions.
+  3. Validate 3 corrected champion v2 geometries via CFD.
+* **Timeline:** ~1 week
+
+### Stage 3: Final Closed-Loop Validation (~2–3 runs)
+```text
+AI optimization
+      ↕
+OpenFOAM feedback
+      ↕
+iterative refinement (if residual > 0.005 m²)
+```
+* **What we do:**
+  1. If Stage 2 residual error $|\Delta C_dA| > 0.005\text{ m}^2$: apply one additional correction cycle.
+  2. Final publication-quality CFD validation of best champion geometries.
+  3. Generate pressure contour and streamline visualizations in ParaView.
+* **Timeline:** ~3–5 days
+
+**Total compute:** ~30–65 wall-clock hours over ~3–4 weeks of overnight batch runs.
 
 ---
 
-## 🔴 Phase 7: Physics-Informed AI Integration (NVIDIA Modulus)
+## 🔴 Phase 8: Physics-Informed AI Integration (NVIDIA Modulus)
 **Goal:** Upgrade the aerodynamic evaluator from a scalar regressor to a 3D pressure and velocity field predictor.
-* **What we do:** Integrate PINN (Physics-Informed Neural Network) surrogates to evaluate surface pressure distributions during latent morphing.
+* **What we do:** Integrate PINN (Physics-Informed Neural Network) and Neural Operator surrogates using NVIDIA Modulus to evaluate surface pressure distributions and volumetric velocity fields during latent shape morphing.
 * **Compute Needed:** **Cloud Multi-GPU Cluster**.
-
----
-
-## 🔴 Phase 8: OpenFOAM Ground-Truth CFD Validation
-**Goal:** Validate AI-generated low-drag vehicle geometries using industry-standard CFD.
-* **What we do:** Run high-fidelity OpenFOAM wind-tunnel simulations on the AI-designed "Champion" car geometries.
-* **Compute Needed:** **HPC CPU Cluster**.
