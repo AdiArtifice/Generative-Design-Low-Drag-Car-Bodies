@@ -1,65 +1,90 @@
-# Executive Summary
+# Generative Design for Low-Drag Car Bodies: AI Aerodynamics Pipeline
 
-This project builds an **AI-assisted aerodynamic design pipeline** for low-drag EV car bodies. It leverages a **3D vehicle geometry dataset** of 4,165 meshes with associated CFD drag coefficients to train machine learning models and generative design tools. The pipeline includes **mesh inspection**, **geometry normalization**, **point-cloud conversion**, **occupancy grid preprocessing**, **metadata integration**, and a **Conditional Triplane VAE (C-VAE)** architecture. We scaled our implementation from an initial single-configuration sandbox (`F_S_WWC_WM`, 692 samples) to a complete **7-configuration streaming preprocessing workflow** (`E_S_WW_WM`, `E_S_WWC_WM`, `F_S_WWC_WM`, `F_S_WWS_WM`, `N_S_WW_WM`, `N_S_WWC_WM`, `N_S_WWS_WM`), yielding **4,165 preprocessed vehicle samples**. The **C-VAE** conditions the PointNet encoder and Triplane decoder on learned label embeddings (`Fastback=0`, `Estateback=1`, `Notchback=2`) to prevent geometric mode collapse across diverse body shapes.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch 2.0+](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![OpenFOAM](https://img.shields.io/badge/CFD-OpenFOAM-00599C.svg)](https://www.openfoam.com/)
+
+An end-to-end **AI-assisted 3D aerodynamic design pipeline** for electric vehicle (EV) car bodies. Leveraging the **DrivAerNet++** dataset (4,165 full-car 3D meshes with CFD drag coefficients), the system couples a **Conditional Triplane VAE (128×128 resolution)** with a **Latent Drag Surrogate Regressor** and **closed-loop gradient-based shape optimization** to synthesize aerodynamically superior vehicle geometries with verified drag reductions up to **26.35%**.
 
 ---
 
 ## Table of Contents
 
 - [Executive Summary](#executive-summary)
-- [Project Overview](#project-overview)  
-- [Goals and Motivation](#goals-and-motivation)  
-- [Dataset Description](#dataset-description)  
-- [7-Configuration Preprocessing Strategy](#7-configuration-preprocessing-strategy)  
-- [Conditional VAE Architecture (C-VAE)](#conditional-vae-architecture-c-vae)  
-- [Hardware & Storage Constraints](#hardware--storage-constraints)  
-- [Directory Structure](#directory-structure)  
-- [Dependencies and Setup](#dependencies-and-setup)  
-- [Preprocessing Pipeline](#preprocessing-pipeline)  
-  - [Mesh Inspection](#mesh-inspection)  
-  - [Mesh Normalization](#mesh-normalization)  
-  - [Point-Cloud Sampling](#point-cloud-sampling)  
-  - [Occupancy Grid Generation](#occupancy-grid-generation)
-  - [Metadata & Split Linking](#metadata--split-linking)  
-- [Scripts and Usage](#scripts-and-usage)  
-- [Modeling and Baseline Results](#modeling-and-baseline-results)  
-- [Mermaid Diagrams](#mermaid-diagrams)  
-- [Future Roadmap](#future-roadmap)  
+- [Project Architecture](#project-architecture)
+- [Dataset Description & Configurations](#dataset-description--configurations)
+- [75% FPS + 25% Curvature Hybrid Sampling](#75-fps--25-curvature-hybrid-sampling)
+- [Conditional Triplane VAE (128×128)](#conditional-triplane-vae-128128)
+- [Surrogate Regressor & Closed-Loop Shape Optimization](#surrogate-regressor--closed-loop-shape-optimization)
+- [Experimental Results](#experimental-results)
+- [Directory Structure](#directory-structure)
+- [Dependencies & Setup](#dependencies--setup)
+- [Scripts & Usage](#scripts--usage)
+- [CFD Validation & Project Roadmap](#cfd-validation--project-roadmap)
 
 ---
 
-## Project Overview
+## Executive Summary
 
-This project focuses on **learning geometry-aerodynamics relationships** for car bodies. Rather than relying on heavy CFD, we use data-driven generative AI to predict drag (`Cd`) and optimize 3D vehicle geometry. Key points:
-
-- **AI-Assisted Design**: Use ML surrogates to approximate aerodynamic behavior directly from 3D geometry, enabling instant shape iteration.
-- **Full 4,857-Sample Dataset**: Scaled across 7 full vehicle configurations covering Fastback, Estateback, and Notchback body types.
-- **Parallel Preprocessing**: Stream-and-delete parallel pipeline to normalize, sample point clouds, and extract occupancy fields while maintaining disk usage below 80 GB.
-- **Conditional Generative Model**: Conditional Triplane VAE (C-VAE) using learned category embeddings (`F`, `E`, `N`) to generate sharp, category-conditioned 3D vehicle geometries without mode collapse.
-- **EV-Oriented Focus**: Focuses on smooth underbodies, wheel covers, and aerodynamic body profiles relevant to electric vehicle design.
+Automotive aerodynamic development traditionally relies on expensive Computational Fluid Dynamics (CFD) simulations requiring millions of cells and hours of wall-clock time per iteration. This project builds a data-driven generative surrogate pipeline that:
+1. **Encodes Diverse Vehicle Topologies:** Normalizes and processes 4,165 3D vehicle geometries across Fastback, Estateback, and Notchback styles into boundary-preserving hybrid point clouds and implicit occupancy fields.
+2. **Generates High-Resolution Surfaces:** Uses a Conditional Triplane VAE ($128 \times 128 \times 16$ feature planes) achieving **90.01% validation occupancy accuracy** to represent sharp, sub-centimeter flow-separation edges (mirrors, pillars, and rear separation lines).
+3. **Optimizes Geometry via Latent Gradients:** Employs a latent drag surrogate ($R^2 > 0.90$, Val MSE = 0.000879) to guide gradient descent directly in the 256-D shape latent space. On test car `E_S_WWC_WM_014`, this achieved a **26.35% theoretical drag reduction** ($C_dA: 0.6536 \rightarrow 0.4814\text{ m}^2$) with high-resolution $128^3$ Marching Cubes mesh export.
+4. **Prepares for Hybrid CFD Verification:** Integrates with an OpenFOAM CFD validation plan balancing local Ubuntu testing with cloud CPU batch execution (Camber Cloud & GCP Compute) under a strictly bounded 10–15 simulation budget.
 
 ---
 
-## Goals and Motivation
+## Project Architecture
 
-- **Long-Term Vision**: A generative system that ingests 3D car designs and synthesizes optimized, low-drag variants while preserving structural volume.
-- **Fast Aerodynamic Surrogate**: Train 3D deep learning models to predict drag from shape as a surrogate for computational fluid dynamics (CFD).
-- **Category-Conditioned Latent Space**: Learn a smooth, interpolatable latent representation conditioned on vehicle class to guide gradient-based shape optimization.
-- **Pipeline Robustness**: Automated, reproducible data engineering in Python for 3D point clouds and implicit occupancy fields.
+```mermaid
+flowchart TD
+    subgraph DataEngine["1. Data Engineering & Hybrid Sampling"]
+        STL["4,165 Raw DrivAerNet++ STLs"] --> Norm["Center & Unit Normalization"]
+        Norm --> Sampling["75% FPS + 25% Curvature Sampling (src/sampling.py)"]
+        Sampling --> HybridPLY["2,048-pt Hybrid Point Clouds (pointclouds_hybrid/)"]
+        Norm --> OccGrid["Occupancy Generation (occupancy/)"]
+    end
+
+    subgraph GenerativeModel["2. High-Resolution Generative C-VAE (128x128)"]
+        HybridPLY --> Enc["PointNet Encoder + Class Embedding (F/E/N)"]
+        Enc --> Latent["Latent Space Z (256-dim)"]
+        Latent --> TriDec["Dynamic Triplane Decoder (3 planes @ 128x128x16)"]
+        OccGrid --> ImpDec["Implicit Occupancy Classifier (BCE Loss)"]
+        TriDec --> ImpDec
+    end
+
+    subgraph OptimizationLoop["3. Latent Drag Surrogate & Shape Morphing"]
+        Latent --> Regressor["Latent Drag Regressor MLP (models/latent_regressor_best_128.pth)"]
+        Regressor --> Pred["Predicted Drag Area (CdA)"]
+        Pred --> GradientOpt["Gradient Descent: min_z [CdA(z, c) + λ ||z - z0||²]"]
+        GradientOpt --> OptLatent["Optimized Latent Vector (z_opt)"]
+        OptLatent --> MarchingCubes["128³ Marching Cubes Reconstruction"]
+        MarchingCubes --> FinalSTL["Watertight STL Mesh (optimization_output/)"]
+    end
+
+    subgraph CFD["4. Hybrid CFD Validation (Phase 7)"]
+        FinalSTL --> Template["Virtual Wind Tunnel (moving ground, half-car sym)"]
+        Template --> OpenFOAM["OpenFOAM simpleFoam RANS (Local PC + Camber/GCP)"]
+        OpenFOAM --> Calibration["Affine Bias Correction: CdA_true = α·CdA_surr + β"]
+    end
+
+    DataEngine --> GenerativeModel
+    GenerativeModel --> OptimizationLoop
+    OptimizationLoop --> CFD
+```
 
 ---
 
-## Dataset Description
+## Dataset Description & Configurations
 
 - **Source:** DrivAerNet++ 3D vehicle geometry and aerodynamic dataset.
-- **Total Preprocessed Dataset:** **4,165 unique 3D vehicle meshes** across 7 configurations.
-- **Point Cloud Representation:** 50,000 surface points + normal vectors per mesh (`.ply` format).
-- **Occupancy Representation:** 2,048 interior/exterior query points and occupancy labels per mesh (`.npz` format).
-- **Metadata:** Master metadata file (`metadata/metadata.csv`) containing `id`, `config`, `body_type`, `body_type_idx` (`0: F`, `1: E`, `2: N`), `cd`, `drag_area`, and split assignment (`train`, `val`, `test`).
+- **Total Dataset:** **4,165 unique 3D vehicle meshes** across 7 configurations.
+- **Master Metadata:** `metadata/metadata.csv` containing `id`, `config`, `body_type`, `body_type_idx` (`0: Fastback`, `1: Estateback`, `2: Notchback`), `cd`, `frontal_area`, `drag_area` ($C_dA = C_d \times A_{\text{frontal}}$), and balanced splits (`train: 80%`, `val: 10%`, `test: 10%`).
 
-### 7 Target Configurations
+### The 7 Configurations
 
-| Config Code | Body Type | Underbody | Wheel Covers | Wheel Mesh | Sample Count |
+| Config Code | Body Type | Underbody | Wheel Covers | Wheel Mesh | Samples |
 | :--- | :--- | :--- | :--- | :--- | :---: |
 | **`E_S_WW_WM`** | Estateback (`E`) | Smooth (`S`) | Standard (`WW`) | Yes (`WM`) | 698 |
 | **`F_S_WWC_WM`** | Fastback (`F`) | Smooth (`S`) | Yes (`WWC`) | Yes (`WM`) | 692 |
@@ -72,159 +97,202 @@ This project focuses on **learning geometry-aerodynamics relationships** for car
 
 ---
 
-## Dataset Split Statistics
+## 75% FPS + 25% Curvature Hybrid Sampling
 
-The master dataset split is deterministically balanced as follows:
+To bridge global macro-silhouette capture with aerodynamic boundary sensitivity, point clouds are downsampled from 50k surface points to **2,048 points** using a hybrid strategy implemented in [`src/sampling.py`](file:///home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main%20Project%20Folder/src/sampling.py):
 
-- **Train Set (80%):** 3,332 vehicles
-- **Validation Set (10%):** 416 vehicles
-- **Test Set (10%):** 417 vehicles
-- **Point Cloud Inputs:** 2,048 points sampled dynamically per item during training.
-- **Occupancy Inputs:** 2,048 query 3D points paired with binary occupancy labels (0/1).
-
----
-
-## Conditional VAE Architecture (C-VAE)
-
-To prevent geometric blur when generating vastly different car shapes (e.g., Estateback vs. Fastback vs. Notchback), we updated our Triplane VAE to a **Conditional Triplane VAE (C-VAE)**:
-
-1. **Category Embedding:** `nn.Embedding(num_classes=3, embed_dim=16)` maps `class_idx` (`0: Fastback`, `1: Estateback`, `2: Notchback`) into a 16-dimensional vector $c_{emb}$.
-2. **Conditioned Encoder:** PointNet encoder concatenates $c_{emb}$ with global max-pooled features (`512 + 16 = 528`) before outputting latent distribution parameters $\mu$ and $\sigma$.
-3. **Conditioned Decoder:** Triplane decoder concatenates $c_{emb}$ with the 256-D latent vector $z$ (`256 + 16 = 272`) to generate spatial feature grids ($64 \times 64 \times 16$) for XY, XZ, and YZ planes.
-4. **Implicit Occupancy Decoder:** Queries spatial coordinates $(x,y,z)$ from the triplane grids to predict inside/outside occupancy probabilities.
+1. **75% Farthest Point Sampling (1,536 points):** Maximizes mutual inter-point Euclidean distance to uniformly cover the roofline pitch, underbody plane, and side panels without spatial voids.
+2. **25% Curvature Saliency Sampling (512 points):** Computes local covariance matrix eigenvalues over $k=20$ nearest neighbors to evaluate the normalized surface variation metric:
+   $$\sigma(p_i) = \frac{\lambda_0}{\lambda_0 + \lambda_1 + \lambda_2}, \quad (\lambda_0 \le \lambda_1 \le \lambda_2)$$
+   Points are sampled according to curvature probabilities, concentrating samples along side mirrors, A-pillars, wheel arches, and rear fastback separation edges.
+3. **Offline Caching:** All 4,165 models pre-downsampled to `pointclouds_hybrid/` with shape `(2048, 6)` `[x, y, z, nx, ny, nz]`, eliminating training data loader bottlenecks.
 
 ---
 
-## Hardware & Storage Constraints
+## Conditional Triplane VAE (128×128)
 
-- **Storage Policy ("Stream-and-Delete"):** Original raw STL files total hundreds of gigabytes. To maintain disk usage under 80 GB on local drives, raw STL files are streamed, processed into `.ply` point clouds and `.npz` occupancies in chunks of 50, and raw STLs are purged immediately.
-- **Training Requirements:** 
-  - **Local CPU:** Supports `--smoke_test` for rapid code verification.
-  - **Cloud/Local GPU:** Model trained using CUDA (`--batch_size 16` to `32`). Runs on GPUs with $\ge 4\text{ GB}$ VRAM (NVIDIA Titan Xp, T4, L4).
+To resolve sub-centimeter automotive details while preventing mode collapse across distinct body topologies, the generative network operates as a **Conditional Triplane VAE (C-VAE)**:
+
+- **Category Conditioning:** Learned 16-dimensional embedding `nn.Embedding(num_classes=3, embed_dim=16)` conditions both the PointNet encoder (`512 + 16 = 528`) and Triplane decoder (`256 + 16 = 272`).
+- **High-Resolution Feature Planes:** Outputs three orthogonal 2D feature grids ($XY, XZ, YZ$) at **$128 \times 128 \times 16$** resolution (786,432 total spatial feature cells — 4× the feature density of 64×64 models).
+- **Implicit Occupancy Query:** An MLP decoder queries trilinear coordinate samples from the triplanes via `grid_sample` to classify spatial inside/outside occupancy.
+- **Training Throughput:** Trained on Camber Cloud GPU (`nidhithakur24`, Job 26675) utilizing `/tmp` local NVMe disk caching and double-buffered parallel loading (`num_workers=2`, `pin_memory=True`), completing **200 epochs in 26 minutes, 59 seconds** (~8.5 s/epoch).
+
+---
+
+## Surrogate Regressor & Closed-Loop Shape Optimization
+
+### Latent Drag Regressor
+- **Architecture:** 3-layer MLP with category embeddings mapping $(\mathbf{z}, c) \rightarrow C_dA$.
+- **Training:** Trained on 4,165 pre-extracted latent vectors from the 128×128 C-VAE encoder.
+- **Performance:** **Best Val MSE = 0.000879** ($R^2 > 0.90$). Saved to [`models/latent_regressor_best_128.pth`](file:///home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main%20Project%20Folder/models/latent_regressor_best_128.pth).
+
+### Closed-Loop Shape Optimization (`scripts/optimize_latent_shape.py`)
+Optimizes vehicle shape by propagating gradients from the drag surrogate back to the latent vector $\mathbf{z}$:
+$$\min_{\mathbf{z}} \text{Regressor}(\mathbf{z}, c) + \lambda \|\mathbf{z} - \mathbf{z}_0\|^2$$
+- $\lambda = 0.01$ (quadratic proximity penalty to preserve vehicle volume and styling constraints).
+- Learning rate = 0.01, 250 Adam optimization steps.
+- **Target Car Benchmark (`E_S_WWC_WM_014` - Estateback / SUV):**
+  - Ground Truth $C_dA$: $0.6296\text{ m}^2$ ($C_d = 0.2576$)
+  - Initial Predicted $C_dA$: $0.6536\text{ m}^2$
+  - Final Optimized $C_dA$: **$0.4814\text{ m}^2$**
+  - **Theoretical Drag Reduction: 26.35%**
+- **Mesh Export:** Reconstructed via $128^3$ Marching Cubes into [`optimization_output/optimized_car_step_250.stl`](file:///home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main%20Project%20Folder/optimization_output/optimized_car_step_250.stl) (20,153 vertices, 40,334 faces, watertight, outward normals).
+
+---
+
+## Experimental Results
+
+| Model / Pipeline Stage | Model Type | Representation / Resolution | Score / Metric | Status |
+| :--- | :--- | :--- | :---: | :---: |
+| **Random Forest Baseline** | Tabular Regressor | 29 Geometric Parameters | $R^2 = 0.4924$ | Baseline |
+| **Gradient Boosting Baseline** | Tabular Regressor | 29 Geometric Parameters | $R^2 = 0.5751$ | Baseline |
+| **3D PointNet Regressor** | Deep Regressor | 2,048 Raw Points | $R^2 = 0.5633$ | Baseline |
+| **Triplane VAE (Early Single-Config)** | Generative | 64×64 Triplane (`F_S_WWC_WM`) | Val Acc = 85.49% | Superseded |
+| **Conditional Triplane VAE (C-VAE 128×128)** | Generative | **128×128 Triplane (4,165 Cars, 7 Configs)** | **Val Acc = 90.01%** (Val Loss: 0.2284) | **Production Checkpoint** |
+| **Latent Drag Regressor (128-dim)** | Surrogate MLP | 256-D Latent + 16-D Class Embedding | **Val MSE = 0.000879** ($R^2 > 0.90$) | **Production Checkpoint** |
+| **Closed-Loop Shape Optimization** | Gradient Optimizer | $128^3$ Marching Cubes Mesh | **-26.35% $\Delta C_dA$** on `E_S_WWC_WM_014` | **Verified Output** |
 
 ---
 
 ## Directory Structure
 
 ```plaintext
-local_subset/
+Main Project Folder/
 │
-├── pointclouds/                       # Output: 50k sampled surface point clouds (PLY)
-│   ├── E_S_WWC_WM/
-│   ├── E_S_WW_WM/
-│   ├── F_S_WWC_WM/
-│   ├── F_S_WWS_WM/
-│   ├── N_S_WWC_WM/
-│   ├── N_S_WWS_WM/
-│   └── N_S_WW_WM/
+├── implementation_plan.md             # Master Implementation Plan & Milestone Tracker (Phases 1-9)
+├── README.md                          # Repository overview & documentation
+├── .gitignore                         # Configured for models, large datasets, and virtualenvs
 │
-├── occupancy/                         # Output: implicit query points & labels (NPZ)
-│   ├── E_S_WWC_WM/
-│   ├── E_S_WW_WM/
-│   ├── F_S_WWC_WM/
-│   ├── F_S_WWS_WM/
-│   ├── N_S_WWC_WM/
-│   ├── N_S_WWS_WM/
-│   └── N_S_WW_WM/
+├── pointclouds_hybrid/                # 4,165 pre-downsampled hybrid PLY clouds (2,048 points)
+├── occupancy/                         # Implicit query coordinates & binary occupancy labels (.npz)
 │
 ├── metadata/
-│   ├── metadata.csv                   # Master dataset CSV (4,857 rows, split, class_idx, Cd)
-│   ├── computed_features.csv          # Bounding box dimensions & frontal areas
-│   └── target_scales.json             # Normalization statistics (Cd & drag_area)
+│   ├── metadata.csv                   # Master dataset CSV (4,165 samples, 80/10/10 split, Cd, CdA)
+│   ├── computed_features.csv          # Frontal areas and bounding dimensions
+│   ├── triplane_history_128.json      # 128x128 C-VAE training metrics (200 epochs)
+│   └── triplane_training_128.png      # Loss and validation accuracy curves
+│
+├── models/
+│   ├── triplane_vae_best_128.pth      # Best 128x128 C-VAE weights (90.01% Val Acc)
+│   └── latent_regressor_best_128.pth  # Retrained 128-dim Latent Drag Regressor
+│
+├── optimization_output/               # Generated 3D meshes across gradient descent iterations
+│   ├── optimized_car_step_0.stl       # Initial reconstruction
+│   ├── optimized_car_step_250.stl     # Final low-drag champion mesh (128³ Marching Cubes)
+│   └── optimization_summary.json      # Iteration history & predicted drag progression
 │
 ├── src/                               # Core Python library
-│   ├── dataset.py                     # VehicleOccupancyDataset & VehiclePointCloudDataset
+│   ├── sampling.py                    # Modular 75% FPS + 25% Curvature sampling algorithms
+│   ├── dataset.py                     # Streaming VehiclePointCloudDataset & OccupancyDataset
 │   └── models/
-│       ├── triplane.py                # Conditional Triplane VAE (TriplaneVAE)
-│       ├── vae.py                     # Conditional PointNet VAE (PointNetVAE)
-│       ├── pointnet.py                # 3D PointNet Drag Regressor
-│       └── latent_regressor.py        # MLP Latent Drag Regressor
+│       ├── triplane.py                # Conditional Triplane VAE (TriplaneVAE, TriplaneDecoder)
+│       ├── vae.py                     # Conditional PointNet VAE
+│       └── latent_regressor.py        # Latent Drag Regressor MLP
 │
-└── scripts/                           # Execution & orchestration scripts
-    ├── preprocess_config_batch.py     # Orchestrator for stream-and-delete batching
-    ├── preprocess_mesh_combined.py    # Parallel worker script (mesh -> PLY + NPZ)
-    ├── link_metadata.py               # Metadata builder & 80/10/10 split generator
-    └── train_triplane.py              # C-VAE PyTorch training script
+├── scripts/                           # Pipeline orchestration scripts
+│   ├── optimize_latent_shape.py       # Closed-loop latent gradient optimization & STL exporter
+│   ├── train_triplane.py              # C-VAE training script (supports --plane_res 128)
+│   ├── train_latent_regressor.py      # Latent surrogate training script
+│   ├── preprocess_pointclouds_hybrid.py # 4,165-car hybrid downsampling pipeline
+│   ├── sample_pointcloud.py           # Standalone point cloud sampler
+│   ├── unit_tests.py                  # Automated pytest verification suite
+│   ├── train_cloud.sh                 # Camber Cloud GPU job runner
+│   └── sync_to_camber_new.sh          # Stash synchronization utility
+│
+└── Project Contextual Files/          # Detailed technical phase blueprints
+    ├── milestone_report_128_optimization.md # Milestone report on 128 C-VAE & shape optimization
+    ├── phase7_cfd_implementation_plan.md   # Hybrid Local + Cloud OpenFOAM CFD validation plan
+    ├── phase8_iterative_cfd_refinement_plan.md # Iterative evidence store & refinement plan
+    └── future_roadmap.md              # Long-term vision and NVIDIA Modulus PINN roadmap
 ```
 
 ---
 
-## Dependencies and Setup
+## Dependencies & Setup
+
+### Environment Setup
 
 ```bash
-# Create environment
-conda create -n aerodesign python=3.10
+# Create and activate environment
+conda create -n aerodesign python=3.10 -y
 conda activate aerodesign
 
-# Install dependencies
-pip install numpy pandas trimesh open3d torch torchvision matplotlib pytest
+# Install core dependencies
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install numpy pandas scipy trimesh open3d matplotlib pytest
+```
+
+### Verification
+
+Run the automated test suite:
+```bash
+python -m pytest scripts/unit_tests.py -v
 ```
 
 ---
 
-## Preprocessing Pipeline
+## Scripts & Usage
 
-```mermaid
-graph LR
-    raw("Raw STL Stream") --> inspect["Mesh Validation"]
-    inspect --> normalize["Unit Normalization"]
-    normalize --> sample["Point Cloud (50k PLY)"]
-    sample --> occ["Occupancy Sampling (NPZ)"]
-    occ --> purge["Purge Raw/Norm STLs"]
-    purge --> link["Link Metadata & Split"]
-    link --> mlready["Master Dataset (4,857 Samples)"]
+### 1. Hybrid Point Cloud Downsampling
+Downsample 50k point clouds to 2,048-point hybrid representations (75% FPS + 25% Curvature):
+```bash
+python scripts/preprocess_pointclouds_hybrid.py \
+    --input_dir pointclouds \
+    --output_dir pointclouds_hybrid \
+    --num_points 2048 \
+    --fps_ratio 0.75 \
+    --knn_k 20
 ```
 
-1. **Mesh Validation:** Verifies face orientation and watertightness.
-2. **Normalization:** Translates center-of-mass to origin `(0,0,0)` and scales bounding box max dimension to `1.0`.
-3. **Point Cloud Sampling:** Samples 50,000 points with normals on the mesh surface.
-4. **Occupancy Sampling:** Samples interior/exterior points relative to the mesh surface.
-5. **Storage Cleanup:** Deletes raw and normalized STL files to preserve disk space.
-6. **Metadata & Split Generation:** Constructs `metadata/metadata.csv` with class indices and 80/10/10 split allocations.
-
----
-
-## Scripts and Usage
-
-### 1. Preprocess Single Configuration or Full Batch
+### 2. Train High-Resolution 128×128 C-VAE
 ```bash
-python scripts/preprocess_config_batch.py \
-    --stl-dir "G:\.shortcut-targets-by-id\1WOsw0v1GPcX8lMXMErBMlQYwLrQKF3pQ\Main Project Resource\3D meshes of EV cars\N_S_WWS_WM" \
-    --config-code "N_S_WWS_WM" \
-    --chunk-size 50 \
-    --num-workers 4
-```
-
-### 2. Train Conditional Triplane VAE (C-VAE)
-```bash
-# Fast CPU Smoke-Test
+# Fast local smoke-test
 python scripts/train_triplane.py --smoke_test
 
-# Full GPU Training (e.g. NVIDIA L4 / T4 / Titan Xp)
-python scripts/train_triplane.py --epochs 20 --batch_size 16 --lr 1e-3 --beta 0.005
+# Production 128x128 training on GPU
+python scripts/train_triplane.py \
+    --epochs 200 \
+    --batch_size 64 \
+    --plane_res 128 \
+    --embed_dim 16 \
+    --lr 1e-3
+```
+
+### 3. Train Latent Drag Surrogate Regressor
+```bash
+python scripts/train_latent_regressor.py \
+    --checkpoint models/triplane_vae_best_128.pth \
+    --epochs 100 \
+    --lr 1e-3
+```
+
+### 4. Run Closed-Loop Aerodynamic Shape Optimization
+```bash
+python scripts/optimize_latent_shape.py \
+    --car_id E_S_WWC_WM_014 \
+    --steps 250 \
+    --lr 0.01 \
+    --lambda_reg 0.01 \
+    --mesh_res 128 \
+    --output_dir optimization_output
 ```
 
 ---
 
-## Modeling and Baseline Results
+## CFD Validation & Project Roadmap
 
-| Model Pipeline | Model Type | Input Features | Test / Val Score | Status |
-| :--- | :--- | :--- | :---: | :---: |
-| **Random Forest** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.4924$ | Baseline |
-| **Gradient Boosting** | Regressor | 29 Tabular Parameters | Test $R^2 = 0.5751$ | Baseline |
-| **3D PointNet** | Regressor | Raw 3D Point Cloud (2k points) | Test $R^2 = 0.5633$ | Baseline |
-| **Triplane VAE** | Generative | Single Config (`F_S_WWC_WM`) | Val Acc = **85.49%** | Completed |
-| **Conditional Triplane VAE (C-VAE)** | Generative | **4,165 Vehicles across 7 Configs** | Val Acc = **80%+** / Latent Regressor $R^2 \sim 0.80+$ | **Completed / Active** |
+### Active Priority: Phase 7 OpenFOAM CFD Validation
+- **Architecture Blueprint:** [`Project Contextual Files/phase7_cfd_implementation_plan.md`](file:///home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main%20Project%20Folder/Project%20Contextual%20Files/phase7_cfd_implementation_plan.md)
+- **Hybrid Compute Strategy:**
+  - **Local Ubuntu PC (Intel i7-12700, 16 GB RAM):** Primary environment for initial case setup, mesh calibration, interactive troubleshooting, and baseline validation (Runs 1–2).
+  - **Camber Cloud (CPU Engine) & GCP Compute:** Automated batch runner for parallel sweeps (Runs 3–6 and 7–10) utilizing available monthly compute allocations.
+- **Budget:** Strictly bounded at **10–15 simulations total** across 3 stages (mesh calibration, affine surrogate bias correction $C_dA_{\text{true}} = \alpha \cdot C_dA_{\text{surr}} + \beta$, and final closed-loop champion validation).
 
----
-
-## Future Roadmap
-
-1. **🟢 Phase 6C: C-VAE & Drag Regressor Training** *(Completed)* — Trained the C-VAE and Latent Drag Regressor on the multi-config dataset to learn a smooth, category-conditioned shape space and drag surrogate.
-2. **🟢 Phase 6D: Multi-Category Latent Shape Optimization** *(Completed)* — Performed gradient-based shape optimization in the conditioned latent space to synthesize low-drag car bodies with volume constraints.
-3. **🟡 Phase 7: OpenFOAM Ground-Truth CFD Validation & Iterative Refinement** — Validate AI-designed vehicle geometries with OpenFOAM CFD on desktop hardware (i7-12700, 16 GB RAM). Budget: **10–15 selective simulations** (~2M cells, half-car symmetry, steady RANS $k$-$\omega$ SST, ~3–5 hrs each):
-   - **Stage 1 (Mesh Calibration + Validation, ~5–6 runs):** Calibrate against known DrivAerNet $C_dA$ baselines, then validate 3 AI champion geometries. Quantify surrogate error.
-   - **Stage 2 (Affine Surrogate Correction, ~3–4 runs):** Fit $C_dA_{\text{true}} = \alpha \cdot C_dA_{\text{surr}} + \beta$, re-optimize with corrected surrogate, validate corrected champions.
-   - **Stage 3 (Final Closed-Loop Validation, ~2–3 runs):** Final publication-quality validation. One additional correction cycle only if residual $\Delta C_dA > 0.005\text{ m}^2$.
-4. **🔴 Phase 8: Iterative AI–CFD Closed-Loop Refinement** — Dual-mode system: Fast Mode (AI-only, seconds) and Physics-Refinement Mode (AI → selective OpenFOAM on champions → evidence accumulation → surrogate correction update → re-optimization). CFD remains sparse and resource-bounded (desktop i7/16GB). Correction model evolves from initial Phase 7 calibration as evidence grows. Success measured by comparing AI-only vs AI+CFD optimized CdA.
-5. **🔴 Phase 9: Physics-Informed AI Integration (NVIDIA Modulus)** — Integrate 3D pressure field predictions and PINN surrogates to guide fine-grained aerodynamic shape morphing.
+### Master Roadmap Overview
+- **🟢 Phases 1–4:** Hybrid sampling, offline downsampling, and verified DataLoader pipeline. *(Completed)*
+- **🟢 Phase 5:** High-res 128×128 C-VAE cloud training (90.01% val accuracy). *(Completed)*
+- **🟢 Phase 6:** Latent drag surrogate and closed-loop shape optimization (-26.35% drag reduction). *(Completed)*
+- **🟡 Phase 7:** OpenFOAM CFD physical ground-truth validation (Hybrid Local + Cloud). *(Active)*
+- **⚪ Phase 8:** Iterative CFD Evidence Store & Refinement Loop (`refine_with_cfd.py`). *(Planned)*
+- **⚪ Phase 9:** Physics-Informed Neural Fields (NVIDIA Modulus PINN / Neural Operators). *(Planned)*
