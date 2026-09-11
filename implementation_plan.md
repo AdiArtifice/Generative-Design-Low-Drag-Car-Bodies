@@ -99,9 +99,9 @@ CFD is structured around a flexible multi-platform strategy rather than a single
 
 ### Immediate Next Action Items for Phase 7
 
-1. **Local OpenFOAM Installation:** Verify/install OpenFOAM on the Ubuntu desktop (`sudo apt install openfoam`).
-2. **Template Wind Tunnel Case:** Create standard virtual wind tunnel case directory with moving ground ($30\text{ m/s}$), inlet ($30\text{ m/s}$), slip boundaries, and half-car symmetry plane ($y=0$).
-3. **Run 1 Mesh Calibration:** Execute OpenFOAM simulation on known Fastback baseline STL to calibrate cell count (~2M cells) and turbulence parameters against published DrivAerNet data.
+1. **Revert Mesh Configuration:** Revert `system/snappyHexMeshDict` in the native ext4 CFD environment (`/home/student/AeroMorphs/cfd_automation`) back to the optimal Medium mesh `level (3 4)`.
+2. **Build Python CFD Bridge:** Build `scripts/openfoam_runner.py` to wrap Nidhi's automated bash scripts, ensuring OpenFOAM execution stays outside the encrypted FUSE mount.
+3. **Execute Different-STL Robustness Test:** Run the bridge with a new STL to prove automation robustness.
 
 ---
 
