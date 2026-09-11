@@ -10,6 +10,7 @@ import os
 import sys
 import time
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -25,6 +26,9 @@ DEPLOY_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DEPLOY_DIR.parent
 STARTUP_SCRIPT = DEPLOY_DIR / "run_benchmark_job.sh"
 LOCAL_RESULTS_DIR = REPO_ROOT / "results"
+
+# Staged scratch script outside Cryptomator mount to avoid whitespace/FUSE latency in gcloud CLI
+STAGED_STARTUP_SCRIPT = Path("/tmp/run_benchmark_job.sh")
 
 # Verified Local Baseline Reference Values (Notchback N_S_WWC_WM_025)
 LOCAL_BASELINE = {
@@ -65,6 +69,10 @@ def main():
     if not STARTUP_SCRIPT.exists():
         raise FileNotFoundError(f"Startup script not found: {STARTUP_SCRIPT}")
 
+    # Stage startup script to clean path
+    shutil.copyfile(STARTUP_SCRIPT, STAGED_STARTUP_SCRIPT)
+    STAGED_STARTUP_SCRIPT.chmod(0o755)
+
     timestamp = int(time.time())
     job_id = f"notchback_benchmark_{timestamp}"
     vm_name = f"cfd-bench-{timestamp}"
@@ -80,6 +88,13 @@ def main():
     print(f"Bucket:       {BUCKET}")
     print("=" * 65)
 
+    metadata_flags = (
+        f"job-id={job_id},"
+        f"bucket-name={BUCKET},"
+        f"stl-path={BUCKET}/benchmark/N_S_WWC_WM_025.stl,"
+        f"template-path={BUCKET}/templates/template_case_v1.tar.gz"
+    )
+
     # Launch VM with metadata & startup-script
     print(f"\n[1/4] Provisioning {MACHINE_TYPE} instance '{vm_name}'...")
     create_cmd = (
@@ -91,8 +106,8 @@ def main():
         f"--boot-disk-size={BOOT_DISK_SIZE} "
         f"--boot-disk-type=pd-balanced "
         f"--scopes=cloud-platform "
-        f"--metadata=job-id={job_id},bucket-name={BUCKET} "
-        f"--metadata-from-file=startup-script='{STARTUP_SCRIPT}'"
+        f"--metadata={metadata_flags} "
+        f"--metadata-from-file=startup-script={STAGED_STARTUP_SCRIPT}"
     )
 
     try:
@@ -147,8 +162,10 @@ def main():
     except KeyboardInterrupt:
         print("\n\n[USER INTERRUPT] Ctrl+C detected! Triggering safe cleanup...")
     finally:
-        # Guarantee VM cleanup
+        # Guarantee VM cleanup and scratch removal
         delete_vm_safe(vm_name)
+        if STAGED_STARTUP_SCRIPT.exists():
+            STAGED_STARTUP_SCRIPT.unlink(missing_ok=True)
 
     if not job_completed:
         print("\n[ERROR] Benchmark did not complete successfully.")
