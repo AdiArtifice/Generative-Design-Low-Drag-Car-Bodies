@@ -8,3 +8,4 @@ scikit-learn
 rtree
 python-dotenv
 open3d
+scipy

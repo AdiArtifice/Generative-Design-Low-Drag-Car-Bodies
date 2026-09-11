@@ -104,7 +104,7 @@ def optimize(args):
         in_channels=6, 
         latent_dim=256, 
         plane_channels=16, 
-        plane_resolution=64, 
+        plane_resolution=args.plane_res, 
         num_classes=num_classes_vae, 
         embed_dim=embed_dim_vae
     ).to(device)
@@ -140,12 +140,13 @@ def optimize(args):
         param.requires_grad = False
         
     # 3. Load baseline car
-    print("Loading dataset to find a baseline high-drag car...")
+    print("Loading dataset to find a baseline car...")
     dataset = VehiclePointCloudDataset(
         csv_path="metadata/metadata.csv",
         scales_path="metadata/target_scales.json",
-        split="test",
+        split=None,
         num_points=2048,
+        pc_dir=args.pc_dir,
         normalize_targets=False
     )
     
@@ -154,15 +155,35 @@ def optimize(args):
     valid_df = dataset.df[valid_mask]
     
     if len(valid_df) == 0:
-        print("Error: No test cars found locally! Cannot perform local optimization.")
+        print("Error: No cars found locally! Cannot perform local optimization.")
         sys.exit(1)
         
-    # Find highest drag car among the valid local cars
-    highest_drag_idx = valid_df['drag_area'].idxmax()
-    row = valid_df.loc[highest_drag_idx]
+    if args.car_id:
+        target_car_id = args.car_id
+    else:
+        # Check if an STL file exists in temp_raw_stl
+        raw_stl_dir = "temp_raw_stl"
+        stl_files = [f for f in os.listdir(raw_stl_dir) if f.endswith(".stl")] if os.path.exists(raw_stl_dir) else []
+        if len(stl_files) > 0:
+            target_car_id = os.path.splitext(stl_files[0])[0]
+            print(f"Auto-detected baseline STL car in '{raw_stl_dir}': {stl_files[0]} -> Car ID: {target_car_id}")
+        else:
+            target_car_id = None
+            
+    if target_car_id:
+        target_rows = valid_df[valid_df['id'] == target_car_id]
+        if len(target_rows) == 0:
+            print(f"Error: Specified or detected car_id '{target_car_id}' not found locally or in metadata.")
+            sys.exit(1)
+        baseline_idx = target_rows.index[0]
+    else:
+        # Find highest drag car among the valid local cars
+        baseline_idx = valid_df['drag_area'].idxmax()
+        
+    row = valid_df.loc[baseline_idx]
     
     # Get the integer index for the dataset loader
-    dataset_idx = dataset.df.index.get_loc(highest_drag_idx)
+    dataset_idx = dataset.df.index.get_loc(baseline_idx)
     baseline_id = row['id']
     
     print(f"Selected baseline car: {baseline_id} with original drag_area = {row['drag_area']:.4f} m^2")
@@ -195,7 +216,7 @@ def optimize(args):
     
     # Export step 0 (baseline)
     print("Exporting initial mesh (Step 0)...")
-    success = extract_mesh(vae, z_opt, "optimization_output/optimized_car_step_0.stl", device, c_emb=c_emb)
+    success = extract_mesh(vae, z_opt, "optimization_output/optimized_car_step_0.stl", device, grid_res=args.grid_res, c_emb=c_emb)
     if not success:
         print("[Warning] Initial mesh reconstruction failed.")
     
@@ -226,7 +247,7 @@ def optimize(args):
         if step % 50 == 0 or step == args.steps:
             output_path = f"optimization_output/optimized_car_step_{step}.stl"
             print(f"  -> Exporting intermediate mesh: {output_path}")
-            success = extract_mesh(vae, z_opt, output_path, device, grid_res=64, threshold=0.5, c_emb=c_emb)
+            success = extract_mesh(vae, z_opt, output_path, device, grid_res=args.grid_res, threshold=0.5, c_emb=c_emb)
             if not success:
                 print(f"[Warning] Mesh reconstruction failed at step {step}.")
             
@@ -260,11 +281,15 @@ def optimize(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--car_id", type=str, default=None, help="ID of baseline car to optimize (e.g. E_S_WWC_WM_014)")
     parser.add_argument("--steps", type=int, default=250, help="Number of optimization steps")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate for Adam optimizer")
     parser.add_argument("--lambda_reg", type=float, default=0.01, help="Squared-L2 penalty weight to preserve core structure")
-    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best.pth", help="Path to pre-trained VAE weights")
-    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best.pth", help="Path to trained regressor weights")
+    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best_128.pth", help="Path to pre-trained VAE weights")
+    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best__128.pth", help="Path to trained regressor weights")
+    parser.add_argument("--plane_res", type=int, default=128, help="Triplane resolution of VAE")
+    parser.add_argument("--grid_res", type=int, default=64, help="Marching Cubes grid resolution for mesh extraction")
+    parser.add_argument("--pc_dir", type=str, default="pointclouds_hybrid", help="Directory containing point clouds")
     parser.add_argument("--num_classes", type=int, default=3, help="Number of vehicle classes for C-VAE")
     parser.add_argument("--embed_dim", type=int, default=16, help="Category embedding dimension")
     parser.add_argument("--seed", type=int, default=42, help="Seed for reproducibility")

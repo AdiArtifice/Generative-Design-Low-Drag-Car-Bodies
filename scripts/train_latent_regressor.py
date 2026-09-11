@@ -34,6 +34,7 @@ def train(args):
         scales_path="metadata/target_scales.json",
         split="train",
         num_points=2048,
+        pc_dir=args.pc_dir,
         normalize_targets=False
     )
     val_dataset = VehiclePointCloudDataset(
@@ -41,6 +42,7 @@ def train(args):
         scales_path="metadata/target_scales.json",
         split="val",
         num_points=2048,
+        pc_dir=args.pc_dir,
         normalize_targets=False
     )
     
@@ -59,7 +61,7 @@ def train(args):
         in_channels=6, 
         latent_dim=256, 
         plane_channels=16, 
-        plane_resolution=64,
+        plane_resolution=args.plane_res,
         num_classes=args.num_classes,
         embed_dim=args.embed_dim
     ).to(device)
@@ -182,7 +184,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_classes", type=int, default=3, help="Number of vehicle body style classes")
     parser.add_argument("--embed_dim", type=int, default=16, help="Dimension of class embedding")
     parser.add_argument("--seed", type=int, default=42, help="Seed for reproducibility")
-    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best.pth", help="Path to pre-trained VAE weights")
+    parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best_128.pth", help="Path to pre-trained VAE weights")
+    parser.add_argument("--plane_res", type=int, default=128, help="Triplane resolution of the VAE")
+    parser.add_argument("--pc_dir", type=str, default="pointclouds_hybrid", help="Directory containing point clouds")
     parser.add_argument("--output_suffix", type=str, default="", help="Suffix for output regressor weights")
     parser.add_argument("--smoke_test", action="store_true", help="Run a quick test with tiny dataset")
     args = parser.parse_args()

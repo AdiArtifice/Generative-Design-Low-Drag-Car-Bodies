@@ -47,6 +47,9 @@ class PointNetEncoder(nn.Module):
         
         if c_emb is not None and self.embed_dim > 0:
             x = torch.cat([x, c_emb], dim=-1)
+        elif self.embed_dim > 0:
+            zeros = torch.zeros(x.size(0), self.embed_dim, device=x.device, dtype=x.dtype)
+            x = torch.cat([x, zeros], dim=-1)
             
         # Latent distribution parameters
         mu = self.fc_mu(x)
@@ -89,6 +92,9 @@ class PointCloudDecoder(nn.Module):
         """
         if c_emb is not None and self.embed_dim > 0:
             z_in = torch.cat([z, c_emb], dim=-1)
+        elif self.embed_dim > 0:
+            zeros = torch.zeros(z.size(0), self.embed_dim, device=z.device, dtype=z.dtype)
+            z_in = torch.cat([z, zeros], dim=-1)
         else:
             z_in = z
             

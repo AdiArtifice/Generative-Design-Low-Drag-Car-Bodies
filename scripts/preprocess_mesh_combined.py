@@ -23,6 +23,9 @@ from dotenv import load_dotenv
 # Load configuration from .env file
 load_dotenv()
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.sampling import hybrid_fps_curvature_sampling
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Parallel combined mesh preprocessing pipeline.")
     parser.add_argument("--raw-dir", type=str, required=True, help="Directory containing raw STL files")
@@ -34,10 +37,14 @@ def parse_args():
     parser.add_argument("--sigma-occ", type=float, default=0.015, help="Surface perturbation standard deviation for occupancy")
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel worker processes/threads")
     parser.add_argument("--save-norm", action="store_true", help="Save the normalized STL file to disk")
+    parser.add_argument("--sampling-strategy", type=str, choices=["uniform", "fps", "hybrid"], default="uniform", help="Sampling strategy for point clouds ('uniform', 'fps', or 'hybrid')")
+    parser.add_argument("--fps-ratio", type=float, default=0.75, help="Ratio of FPS points in hybrid mode (default: 0.75)")
+    parser.add_argument("--knn-k", type=int, default=20, help="k-NN parameter for curvature estimation (default: 20)")
     return parser.parse_args()
 
 def process_single_file(file_path: Path, norm_dir: Path, pc_dir: Path, occ_dir: Path, 
-                        num_points_pc: int, num_points_occ: int, sigma_occ: float, save_norm: bool = False) -> bool:
+                        num_points_pc: int, num_points_occ: int, sigma_occ: float, save_norm: bool = False,
+                        sampling_strategy: str = "uniform", fps_ratio: float = 0.75, knn_k: int = 20) -> bool:
     """
     Main worker function that preprocesses a single raw mesh file through the entire pipeline:
     1. Load Raw Mesh -> 2. Normalize Vertices -> 3. Export STL (optional) -> 4. Sample PC -> 5. Sample Occupancy
@@ -82,9 +89,37 @@ def process_single_file(file_path: Path, norm_dir: Path, pc_dir: Path, occ_dir: 
             o3d.io.write_triangle_mesh(str(norm_path), mesh, write_ascii=False)
         
         # Step 4: Sample Point Cloud from the normalized mesh
-        pcd = mesh.sample_points_uniformly(number_of_points=num_points_pc)
-        if not pcd.has_points():
-            raise ValueError(f"Failed to sample points from mesh surface: {file_path.name}")
+        if sampling_strategy == "hybrid":
+            dense_count = max(50000, num_points_pc * 10)
+            dense_pcd = mesh.sample_points_uniformly(number_of_points=dense_count)
+            if not dense_pcd.has_points():
+                raise ValueError(f"Failed to sample points from mesh surface: {file_path.name}")
+            
+            pts = np.asarray(dense_pcd.points, dtype=np.float32)
+            nms = np.asarray(dense_pcd.normals, dtype=np.float32)
+            
+            features = hybrid_fps_curvature_sampling(
+                points=pts,
+                normals=nms,
+                total_points=num_points_pc,
+                fps_ratio=fps_ratio,
+                k_neighbors=knn_k
+            )
+            
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(features[:, :3])
+            pcd.normals = o3d.utility.Vector3dVector(features[:, 3:])
+            del dense_pcd
+        elif sampling_strategy == "fps":
+            dense_pcd = mesh.sample_points_uniformly(number_of_points=max(num_points_pc * 2, 10000))
+            if not dense_pcd.has_points():
+                raise ValueError(f"Failed to sample points from mesh surface: {file_path.name}")
+            pcd = dense_pcd.farthest_point_down_sample(num_points_pc)
+            del dense_pcd
+        else:
+            pcd = mesh.sample_points_uniformly(number_of_points=num_points_pc)
+            if not pcd.has_points():
+                raise ValueError(f"Failed to sample points from mesh surface: {file_path.name}")
             
         pc_path = pc_dir / f"{file_path.stem}_pc.ply"
         o3d.io.write_point_cloud(str(pc_path), pcd, write_ascii=False)
@@ -186,7 +221,10 @@ def main():
                 num_points_pc=args.num_points_pc,
                 num_points_occ=args.num_points_occ,
                 sigma_occ=args.sigma_occ,
-                save_norm=args.save_norm
+                save_norm=args.save_norm,
+                sampling_strategy=args.sampling_strategy,
+                fps_ratio=args.fps_ratio,
+                knn_k=args.knn_k
             )
             if success:
                 successful_count += 1
@@ -206,7 +244,10 @@ def main():
                     num_points_pc=args.num_points_pc,
                     num_points_occ=args.num_points_occ,
                     sigma_occ=args.sigma_occ,
-                    save_norm=args.save_norm
+                    save_norm=args.save_norm,
+                    sampling_strategy=args.sampling_strategy,
+                    fps_ratio=args.fps_ratio,
+                    knn_k=args.knn_k
                 )
                 futures[future] = file_path
                 

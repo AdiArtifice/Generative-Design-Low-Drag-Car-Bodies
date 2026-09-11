@@ -40,6 +40,9 @@ def parse_args():
     parser.add_argument("--beta", type=float, default=0.005, help="KL Divergence weight hyperparameter")
     parser.add_argument("--num_points", type=int, default=2048, help="Number of points in input cloud")
     parser.add_argument("--num_query_points", type=int, default=2048, help="Number of query points to load")
+    parser.add_argument("--pc_dir", type=str, default="pointclouds", help="Root directory for point clouds")
+    parser.add_argument("--occupancy_dir", type=str, default="occupancy", help="Root directory for occupancy NPZ files")
+    parser.add_argument("--num_workers", type=int, default=2, help="Number of DataLoader worker processes")
     parser.add_argument("--smoke_test", action="store_true", help="Run a fast local test on CPU")
     parser.add_argument("--output_suffix", type=str, default="", help="Suffix for output artifacts")
     return parser.parse_args()
@@ -149,12 +152,16 @@ def main():
         split="train", 
         num_points=args.num_points, 
         num_query_points=args.num_query_points,
+        occupancy_dir=args.occupancy_dir,
+        pc_dir=args.pc_dir,
         normalize_targets=True
     )
     val_dataset = VehicleOccupancyDataset(
         split="val", 
         num_points=args.num_points, 
         num_query_points=args.num_query_points,
+        occupancy_dir=args.occupancy_dir,
+        pc_dir=args.pc_dir,
         normalize_targets=True
     )
     
@@ -163,8 +170,21 @@ def main():
         val_dataset.df = val_dataset.df.head(2).reset_index(drop=True)
         print(f"Smoke-test: limited dataset to {len(train_dataset)} samples.")
         
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    pin_mem = (device.type == "cuda")
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=args.batch_size, 
+        shuffle=True, 
+        num_workers=args.num_workers,
+        pin_memory=pin_mem
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=args.batch_size, 
+        shuffle=False, 
+        num_workers=args.num_workers,
+        pin_memory=pin_mem
+    )
     
     # 2. Initialize Model, Optimizer
     model = TriplaneVAE(

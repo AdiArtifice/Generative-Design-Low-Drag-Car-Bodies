@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import pandas as pd
 import numpy as np
@@ -7,21 +8,30 @@ from torch.utils.data import Dataset, DataLoader
 import trimesh
 from pathlib import Path
 
+# Add project root to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.sampling import hybrid_fps_curvature_sampling
+
 class VehiclePointCloudDataset(Dataset):
     """
     Custom PyTorch Dataset for loading 3D vehicle point clouds (coordinates and normals)
     and their associated aerodynamic targets (Cd, Drag Area).
     """
     def __init__(self, csv_path="metadata/metadata.csv", scales_path="metadata/target_scales.json", 
-                 split=None, num_points=2048, normalize_targets=True, filter_nan_targets=True):
+                 split=None, num_points=2048, pc_dir="pointclouds", normalize_targets=True, filter_nan_targets=True,
+                 sampling_strategy="hybrid", fps_ratio=0.75, knn_k=20):
         """
         Args:
             csv_path (str): Path to master metadata CSV.
             scales_path (str): Path to target scales JSON.
             split (str): One of 'train', 'val', 'test', or None for all.
             num_points (int): Number of points to sample dynamically.
+            pc_dir (str): Root directory containing point cloud PLY files.
             normalize_targets (bool): Whether to normalize targets using target_scales.json stats.
             filter_nan_targets (bool): Filter out rows where aerodynamic targets (drag_area/cd) are NaN.
+            sampling_strategy (str): 'hybrid' (75% FPS + 25% Curvature), 'random', or 'none'.
+            fps_ratio (float): Ratio of FPS points in hybrid mode.
+            knn_k (int): k-NN parameter for curvature computation.
         """
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"Metadata file not found at {csv_path}")
@@ -39,7 +49,11 @@ class VehiclePointCloudDataset(Dataset):
             self.df = self.df[self.df["split"] == split].reset_index(drop=True)
             
         self.num_points = num_points
+        self.pc_dir = pc_dir
         self.normalize_targets = normalize_targets
+        self.sampling_strategy = sampling_strategy
+        self.fps_ratio = fps_ratio
+        self.knn_k = knn_k
         
         # Load targets statistics for normalization
         if self.normalize_targets:
@@ -55,31 +69,46 @@ class VehiclePointCloudDataset(Dataset):
         row = self.df.iloc[idx]
         
         # 1. Load point cloud
-        pc_path = row["pointcloud_path"]
-        if not os.path.exists(pc_path):
-            raise FileNotFoundError(f"Point cloud file not found at {pc_path}")
+        raw_pc_path = Path(row["pointcloud_path"])
+        if raw_pc_path.parts and raw_pc_path.parts[0] == "pointclouds":
+            pc_rel_path = Path(*raw_pc_path.parts[1:])
+        else:
+            pc_rel_path = raw_pc_path
+        pc_path = Path(self.pc_dir) / pc_rel_path
+        
+        if not pc_path.exists():
+            if os.path.exists(row["pointcloud_path"]):
+                pc_path = Path(row["pointcloud_path"])
+            else:
+                raise FileNotFoundError(f"Point cloud file not found at {pc_path}")
             
-        pcd = trimesh.load(pc_path)
+        pcd = trimesh.load(str(pc_path))
         raw_data = pcd.metadata["_ply_raw"]["vertex"]["data"]
         points = np.stack([raw_data['x'], raw_data['y'], raw_data['z']], axis=-1).astype(np.float32)
         normals = np.stack([raw_data['nx'], raw_data['ny'], raw_data['nz']], axis=-1).astype(np.float32)
         
-        # 2. Downsample points dynamically (crucial for CPU training and batching)
+        # 2. Downsample points dynamically or load pre-sampled
         num_pc_points = len(points)
-        if num_pc_points >= self.num_points:
-            indices = np.random.choice(num_pc_points, self.num_points, replace=False)
+        if num_pc_points == self.num_points:
+            features = np.concatenate([points, normals], axis=1)  # shape: [num_points, 6]
+        elif self.sampling_strategy == "hybrid":
+            features = hybrid_fps_curvature_sampling(
+                points, normals, 
+                total_points=self.num_points, 
+                fps_ratio=self.fps_ratio, 
+                k_neighbors=self.knn_k
+            )
         else:
-            # Handle fallback if point cloud has fewer points (should not happen for 50k points)
-            indices = np.random.choice(num_pc_points, self.num_points, replace=True)
-            
-        points = points[indices]
-        normals = normals[indices]
-        
-        # 3. Concatenate coordinates [x, y, z] and normals [nx, ny, nz] -> shape: [num_points, 6]
-        features = np.concatenate([points, normals], axis=1) # shape: [num_points, 6]
+            if num_pc_points >= self.num_points:
+                indices = np.random.choice(num_pc_points, self.num_points, replace=False)
+            else:
+                indices = np.random.choice(num_pc_points, self.num_points, replace=True)
+            points = points[indices]
+            normals = normals[indices]
+            features = np.concatenate([points, normals], axis=1)  # shape: [num_points, 6]
         
         # Transpose to [6, num_points] as expected by PyTorch 1D convolutions (PointNet)
-        features_tensor = torch.tensor(features, dtype=torch.float32).t() # shape: [6, num_points]
+        features_tensor = torch.tensor(features, dtype=torch.float32).t()  # shape: [6, num_points]
         
         # 4. Extract targets & body_type class index (0: F, 1: E, 2: N)
         body_type_map = {'F': 0, 'E': 1, 'N': 2}
@@ -125,8 +154,9 @@ class VehicleOccupancyDataset(Dataset):
     along with associated aerodynamic targets.
     """
     def __init__(self, csv_path="metadata/metadata.csv", scales_path="metadata/target_scales.json", 
-                 occupancy_dir="occupancy", split=None, num_points=2048, 
-                 num_query_points=2048, normalize_targets=True):
+                 occupancy_dir="occupancy", pc_dir="pointclouds", split=None, num_points=2048, 
+                 num_query_points=2048, normalize_targets=True,
+                 sampling_strategy="hybrid", fps_ratio=0.75, knn_k=20):
         """
         Args:
             csv_path (str): Path to master metadata CSV.
@@ -136,6 +166,9 @@ class VehicleOccupancyDataset(Dataset):
             num_points (int): Number of point cloud points to sample dynamically.
             num_query_points (int): Number of occupancy query points to load/sample from the NPZ.
             normalize_targets (bool): Whether to normalize targets.
+            sampling_strategy (str): 'hybrid', 'random', or 'none'.
+            fps_ratio (float): Ratio of FPS points.
+            knn_k (int): k-NN parameter for curvature estimation.
         """
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"Metadata file not found at {csv_path}")
@@ -151,7 +184,11 @@ class VehicleOccupancyDataset(Dataset):
         self.num_points = num_points
         self.num_query_points = num_query_points
         self.occupancy_dir = occupancy_dir
+        self.pc_dir = pc_dir
         self.normalize_targets = normalize_targets
+        self.sampling_strategy = sampling_strategy
+        self.fps_ratio = fps_ratio
+        self.knn_k = knn_k
         
         # Load targets statistics for normalization
         if self.normalize_targets:
@@ -167,28 +204,46 @@ class VehicleOccupancyDataset(Dataset):
         row = self.df.iloc[idx]
         
         # 1. Load point cloud
-        pc_path = row["pointcloud_path"]
-        if not os.path.exists(pc_path):
-            raise FileNotFoundError(f"Point cloud file not found at {pc_path}")
+        raw_pc_path = Path(row["pointcloud_path"])
+        if raw_pc_path.parts and raw_pc_path.parts[0] == "pointclouds":
+            pc_rel_path = Path(*raw_pc_path.parts[1:])
+        else:
+            pc_rel_path = raw_pc_path
+        pc_path = Path(self.pc_dir) / pc_rel_path
+        
+        if not pc_path.exists():
+            # Fallback to direct path in row if relative path not found
+            if os.path.exists(row["pointcloud_path"]):
+                pc_path = Path(row["pointcloud_path"])
+            else:
+                raise FileNotFoundError(f"Point cloud file not found at {pc_path}")
             
-        pcd = trimesh.load(pc_path)
+        pcd = trimesh.load(str(pc_path))
         raw_data = pcd.metadata["_ply_raw"]["vertex"]["data"]
         points = np.stack([raw_data['x'], raw_data['y'], raw_data['z']], axis=-1).astype(np.float32)
         normals = np.stack([raw_data['nx'], raw_data['ny'], raw_data['nz']], axis=-1).astype(np.float32)
         
-        # Downsample points dynamically
+        # Downsample points dynamically or load pre-sampled
         num_pc_points = len(points)
-        if num_pc_points >= self.num_points:
-            indices = np.random.choice(num_pc_points, self.num_points, replace=False)
+        if num_pc_points == self.num_points:
+            features = np.concatenate([points, normals], axis=1)  # shape: [num_points, 6]
+        elif self.sampling_strategy == "hybrid":
+            features = hybrid_fps_curvature_sampling(
+                points, normals, 
+                total_points=self.num_points, 
+                fps_ratio=self.fps_ratio, 
+                k_neighbors=self.knn_k
+            )
         else:
-            indices = np.random.choice(num_pc_points, self.num_points, replace=True)
+            if num_pc_points >= self.num_points:
+                indices = np.random.choice(num_pc_points, self.num_points, replace=False)
+            else:
+                indices = np.random.choice(num_pc_points, self.num_points, replace=True)
+            points = points[indices]
+            normals = normals[indices]
+            features = np.concatenate([points, normals], axis=1)  # shape: [num_points, 6]
             
-        points = points[indices]
-        normals = normals[indices]
-        
-        # Concatenate coordinates [x, y, z] and normals [nx, ny, nz] -> shape: [num_points, 6]
-        features = np.concatenate([points, normals], axis=1) # shape: [num_points, 6]
-        features_tensor = torch.tensor(features, dtype=torch.float32).t() # shape: [6, num_points]
+        features_tensor = torch.tensor(features, dtype=torch.float32).t()  # shape: [6, num_points]
         
         # 2. Load occupancy query points and labels
         raw_occ_path = Path(row["occupancy_path"])

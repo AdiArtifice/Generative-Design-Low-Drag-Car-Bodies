@@ -26,7 +26,7 @@ Phase 7's affine calibration (α, β) is **not discarded** — it is the first e
 | **OS** | Ubuntu 24.04 LTS |
 
 > [!IMPORTANT]
-> CFD must remain **sparse and resource-bounded** at all times. No HPC, no cloud compute for CFD. Every OpenFOAM run costs ~3–5 hours on 8 cores.
+> CFD must remain **sparse and resource-bounded** at all times (preserving the 10–15 run budget). Following the Phase 7 hybrid compute strategy, CFD runs are developed and calibrated locally on Ubuntu, with automated batch simulations optionally dispatched to Camber Cloud CPU or GCP Compute. Every OpenFOAM run costs ~3–5 hours on 8 cores.
 
 ---
 

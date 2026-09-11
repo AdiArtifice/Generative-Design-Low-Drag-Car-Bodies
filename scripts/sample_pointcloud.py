@@ -23,8 +23,11 @@ from dotenv import load_dotenv
 # Load configuration from .env file
 load_dotenv()
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.sampling import hybrid_fps_curvature_sampling
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Convert STL meshes to point clouds via FPS.")
+    parser = argparse.ArgumentParser(description="Convert STL meshes to point clouds via FPS or Hybrid Curvature Sampling.")
     
     # Default paths and parameters from environment variables, falling back to sensible defaults
     default_input = os.getenv("NORMALIZED_STL_DIR", "normalized/fastback_smooth_wheelcovers")
@@ -52,21 +55,43 @@ def parse_args():
     parser.add_argument(
         "--use-fps",
         action="store_true",
-        help="Use Farthest Point Sampling (FPS) downsampling for optimal spatial coverage (default: False, runs uniform sampling directly for speed)"
+        help="Use Farthest Point Sampling (FPS) downsampling for optimal spatial coverage"
+    )
+    parser.add_argument(
+        "--sampling-strategy",
+        type=str,
+        choices=["uniform", "fps", "hybrid"],
+        default="hybrid",
+        help="Sampling strategy: 'uniform', 'fps', or 'hybrid' (75% FPS + 25% Curvature) (default: 'hybrid')"
+    )
+    parser.add_argument(
+        "--fps-ratio",
+        type=float,
+        default=0.75,
+        help="Ratio of FPS points when using hybrid strategy (default: 0.75)"
+    )
+    parser.add_argument(
+        "--knn-k",
+        type=int,
+        default=20,
+        help="k-NN parameter for local surface curvature calculation (default: 20)"
     )
     
     return parser.parse_args()
 
-def sample_mesh_to_pc(file_path: Path, output_dir: Path, num_points: int, use_fps: bool) -> bool:
+def sample_mesh_to_pc(file_path: Path, output_dir: Path, num_points: int, 
+                       sampling_strategy: str = "hybrid", fps_ratio: float = 0.75, knn_k: int = 20) -> bool:
     """
-    Loads a single mesh, performs uniform surface sampling (and optional
-    Farthest Point Downsampling if use_fps is True), and writes the output to PLY format.
+    Loads a single mesh, performs point cloud sampling using the specified strategy,
+    and writes the output to PLY format.
     
     Parameters:
         file_path (Path): Path to the input normalized STL file.
         output_dir (Path): Directory to save the PLY point cloud.
         num_points (int): Number of target points.
-        use_fps (bool): Whether to use Farthest Point Downsampling.
+        sampling_strategy (str): 'uniform', 'fps', or 'hybrid'.
+        fps_ratio (float): Ratio of FPS points in hybrid mode.
+        knn_k (int): k-NN parameter for curvature estimation.
         
     Returns:
         bool: True if successful, False otherwise.
@@ -82,16 +107,37 @@ def sample_mesh_to_pc(file_path: Path, output_dir: Path, num_points: int, use_fp
         mesh.compute_vertex_normals()
         
         # 2. Sampling
-        if use_fps:
-            # Sample 2x points first to provide a dense pool for FPS downsampling
-            dense_pcd = mesh.sample_points_uniformly(number_of_points=num_points * 2)
+        if sampling_strategy == "hybrid":
+            # Sample dense points first (e.g. 50k points or 10x target points)
+            dense_count = max(50000, num_points * 10)
+            dense_pcd = mesh.sample_points_uniformly(number_of_points=dense_count)
             if not dense_pcd.has_points():
                 raise ValueError("Failed to uniformly sample dense points from mesh surface.")
-            # Farthest Point Downsampling (FPS) for spatial uniformity
+            
+            pts = np.asarray(dense_pcd.points, dtype=np.float32)
+            nms = np.asarray(dense_pcd.normals, dtype=np.float32)
+            
+            features = hybrid_fps_curvature_sampling(
+                points=pts,
+                normals=nms,
+                total_points=num_points,
+                fps_ratio=fps_ratio,
+                k_neighbors=knn_k
+            )
+            
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(features[:, :3])
+            pcd.normals = o3d.utility.Vector3dVector(features[:, 3:])
+            del dense_pcd
+            
+        elif sampling_strategy == "fps":
+            dense_pcd = mesh.sample_points_uniformly(number_of_points=max(num_points * 2, 10000))
+            if not dense_pcd.has_points():
+                raise ValueError("Failed to uniformly sample dense points from mesh surface.")
             pcd = dense_pcd.farthest_point_down_sample(num_points)
             del dense_pcd
         else:
-            # Direct uniform sampling (extremely fast!)
+            # Direct uniform sampling
             pcd = mesh.sample_points_uniformly(number_of_points=num_points)
             
         if not pcd.has_points() or len(pcd.points) != num_points:
@@ -120,20 +166,24 @@ def main():
     output_dir = Path(args.output)
     num_points = args.num_points
     
+    # Resolve strategy from --use-fps flag if set explicitly
+    strategy = args.sampling_strategy
+    if args.use_fps and strategy == "hybrid":
+        strategy = "fps"
+    
     print("=" * 60)
     print("                Mesh Preprocessing Pipeline: PC Sampling")
     print("=" * 60)
     print(f"Input directory : {input_dir}")
     print(f"Output directory: {output_dir}")
     print(f"Target points   : {num_points}")
-    print(f"Use FPS         : {args.use_fps}")
+    print(f"Strategy        : {strategy} (FPS ratio: {args.fps_ratio}, k-NN: {args.knn_k})")
     print("-" * 60)
     
     if not input_dir.exists():
         print(f"[Error] Input directory '{input_dir}' does not exist.")
         sys.exit(1)
         
-    # Find all normalized STL files
     stl_files = sorted(list(input_dir.glob("*.stl")))
     total_files = len(stl_files)
     
@@ -143,21 +193,25 @@ def main():
         
     print(f"Found {total_files} meshes to sample. Starting sampling...")
     
-    # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Set seed for determinism (both numpy and open3d random generators)
     np.random.seed(42)
     o3d.utility.random.seed(42)
     
     successful_count = 0
     for idx, file_path in enumerate(stl_files, start=1):
         print(f"[{idx}/{total_files}] Sampling {file_path.name}...", end="", flush=True)
-        success = sample_mesh_to_pc(file_path, output_dir, num_points, args.use_fps)
+        success = sample_mesh_to_pc(
+            file_path=file_path, 
+            output_dir=output_dir, 
+            num_points=num_points, 
+            sampling_strategy=strategy,
+            fps_ratio=args.fps_ratio,
+            knn_k=args.knn_k
+        )
         if success:
             successful_count += 1
             print(" Done.", flush=True)
-        # Clean up RAM immediately after each file
         gc.collect()
         
     print("-" * 60)

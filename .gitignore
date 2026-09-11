@@ -1,7 +1,10 @@
-# Python/Pytest
+# Python/Pytest & Virtual Environments
 __pycache__/
 .pytest_cache/
 *.pyc
+.venv/
+venv/
+env/
 
 # IDEs
 .vscode/
@@ -12,8 +15,10 @@ __pycache__/
 
 # Large Datasets
 raw_stl/
+temp_raw_stl/
 normalized/
 pointclouds/
+pointclouds_hybrid/
 occupancy/
 *.xlsx
 
@@ -30,6 +35,7 @@ reconstructed_test*.stl
 camber-logs/
 *.log
 stash_ls.json
+scratch/
 
 # Generated Optimization Meshes
 optimization_output/

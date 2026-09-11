@@ -1,23 +1,25 @@
-# Phase 7: OpenFOAM CFD Validation — Desktop-Constrained Implementation Plan
+# Phase 7: OpenFOAM CFD Validation — Hybrid Local & Cloud Implementation Plan
 
 > **Target Metric:** $C_dA$ (Drag Area, in m²) = $C_d \times A_{\text{frontal}}$.
 > This is the surrogate's prediction target throughout the pipeline (`drag_area` in metadata, `LatentDragRegressor`, and `optimize_latent_shape.py`). OpenFOAM outputs $C_d$ and force coefficients — we multiply by the geometry's frontal area $A$ to obtain the comparable $C_dA$.
 
 ---
 
-## Hardware Reality Check
+## Compute Environment & Multi-Platform Strategy
 
-| Resource | Available | Implication |
-| :--- | :--- | :--- |
-| **CPU** | Intel i7-12700 (8P + 4E = 12 cores / 20 threads) | Can dedicate **8–10 cores** to OpenFOAM while keeping the machine responsive |
-| **RAM** | 16 GB | Hard ceiling: **~5–6M cells max** (rule of thumb: ~2–2.5 GB per 1M cells + OS overhead). Practical target: **≤ 3M cells** |
-| **GPU** | Intel UHD 770 (integrated) | No CUDA. OpenFOAM is CPU-based, so this is fine for CFD. No GPU-accelerated meshing |
-| **Storage** | 512 GB SSD | Each OpenFOAM case ≈ 1–3 GB. Budget ~30–50 GB for all cases. Comfortable |
-| **OS** | Ubuntu 24.04 LTS | Native OpenFOAM support via APT. Best-case scenario |
+CFD validation is structured as a **hybrid local + cloud pipeline**. Rather than being strictly constrained to a single desktop or relying on expensive continuous cloud clusters, compute is selected dynamically based on task phase, turnaround urgency, and available monthly quotas.
+
+### Platform Roles & Selection Matrix
+
+| Platform | Compute Specs | Cost / Quota Profile | Primary Role & Strengths | When to Select |
+| :--- | :--- | :--- | :--- | :--- |
+| **Local Ubuntu PC** *(Primary Bed)* | Intel i7-12700 (12C/20T, 8 dedicated cores), 16 GB RAM, 512 GB SSD | **Zero additional cost** | • Initial CFD template setup & script authoring<br>• Mesh parameter debugging & `snappyHexMesh` visual inspection<br>• Baseline mesh calibration (Runs 1–2)<br>• Interactive convergence troubleshooting in ParaView | Default for all setup, debugging, and initial calibration runs. |
+| **Camber Cloud (CPU)** *(Batch Runner)* | Dedicated Cloud CPU Nodes (e.g., 8–16 vCPUs, 32–64 GB RAM) | Uses available monthly Camber compute credits / quotas | • Asynchronous batch processing of validated cases<br>• Frees local desktop for development and model training<br>• Extra RAM headroom prevents meshing OOM spikes | Automated batch runs (Runs 3–6, 7–10) when local PC is in use or overnight runs are offloaded. |
+| **GCP Compute Engine** *(Elastic Burst)* | Compute-Optimized VMs (e.g., `c2-standard-8` or `c3-standard-8`, 8 vCPUs, 32 GB RAM) | On-demand cloud billing or credits (~$0.30–$0.40/hr) | • Highly elastic parallel batch execution<br>• Fast multi-case sweeps when turnaround is critical<br>• Direct integration with cloud storage buckets | Multiple concurrent simulation runs or when Camber monthly quota is exhausted. |
 
 > [!IMPORTANT]
-> **Total CFD Budget: 10–15 simulations.**
-> At ~2–4 hours per run on 8 cores, this represents ~20–60 hours of compute — roughly **1–2 weeks of overnight runs**. Every simulation must be justified.
+> **Total CFD Budget: 10–15 simulations (Strictly Preserved).**
+> Adding cloud options does **not** increase the simulation budget. CFD remains a sparse, high-value validation tool. At ~2–4 hours per run on 8 cores (local or cloud), this represents ~25–50 core-hours total. Every simulation must be justified.
 
 ---
 
@@ -27,7 +29,7 @@
 2. **Half-car symmetry** halves the cell count (the AI-generated meshes are bilaterally symmetric from DrivAerNet).
 3. **Coarse RANS for trends, not absolute truth.** At 2M cells we capture relative $\Delta C_dA$ between designs accurately, which is sufficient for surrogate correction.
 4. **Affine bias correction** — fit a simple $C_dA_{\text{true}} = \alpha \cdot C_dA_{\text{surrogate}} + \beta$ with 3–5 data points. This is the maximum correction a sparse CFD budget can support.
-5. **Overnight batch execution.** Queue runs to execute while the machine is idle.
+5. **Flexible batch execution (local overnight or cloud asynchronous).** Interactive calibration runs execute locally; batch sweeps can be queued locally or dispatched to Camber Cloud / GCP Compute to eliminate local machine lockup.
 
 ---
 
@@ -132,14 +134,14 @@ For AI-generated champion geometries (which have no metadata entry), we compute 
 
 **Purpose:** Establish trust in the CFD setup and quantify surrogate prediction error.
 
-| Run # | Geometry | Source | Why |
-| :---: | :--- | :--- | :--- |
-| 1 | Known DrivAerNet baseline (Fastback, known $C_dA$) | Original dataset | **Mesh calibration.** Compare OpenFOAM $C_dA$ against published DrivAerNet values to validate the CFD setup itself |
-| 2 | Known DrivAerNet baseline (Estateback, known $C_dA$) | Original dataset | Cross-body-type calibration |
-| 3 | AI Champion — Fastback | `optimization_output/` | First AI validation |
-| 4 | AI Champion — Estateback | `optimization_output/` | Second AI validation |
-| 5 | AI Champion — Notchback | `optimization_output/` | Third AI validation |
-| 6 | *(Optional)* Worst-performing AI geometry | `optimization_output/` | Anchor the error range at both extremes |
+| Run # | Geometry | Source | Platform | Why |
+| :---: | :--- | :--- | :--- | :--- |
+| 1 | Known DrivAerNet baseline (Fastback, known $C_dA$) | Original dataset | **Local Ubuntu PC** | **Mesh calibration.** Compare OpenFOAM $C_dA$ against published DrivAerNet values to validate the CFD setup itself |
+| 2 | Known DrivAerNet baseline (Estateback, known $C_dA$) | Original dataset | **Local Ubuntu PC** | Cross-body-type calibration; verify boundary layer & wake resolution |
+| 3 | AI Champion — Fastback | `optimization_output/` | **Local / Camber / GCP** | First AI validation |
+| 4 | AI Champion — Estateback | `optimization_output/` | **Local / Camber / GCP** | Second AI validation |
+| 5 | AI Champion — Notchback | `optimization_output/` | **Local / Camber / GCP** | Third AI validation |
+| 6 | *(Optional)* Worst-performing AI geometry | `optimization_output/` | **Local / Camber / GCP** | Anchor the error range at both extremes |
 
 > [!NOTE]
 > For AI-generated champion STLs (Runs 3–6), the frontal area $A_{\text{frontal}}$ must be computed from the mesh geometry (YZ-plane projection) since these shapes have no entry in `computed_features.csv`.
@@ -149,7 +151,7 @@ For AI-generated champion geometries (which have no metadata entry), we compute 
 - Error table: $\Delta C_dA = C_dA_{\text{CFD}} - C_dA_{\text{surrogate}}$ for each AI champion
 - Initial error statistics: mean bias, std, correlation
 
-**Timeline:** ~1.5 weeks (run overnight, post-process during the day)
+**Timeline:** ~1–1.5 weeks (local overnight runs) or **1–2 days** (if batch-dispatched to Camber Cloud / GCP)
 
 ---
 
@@ -192,23 +194,23 @@ drag_area_corrected = alpha * drag_area_predicted + beta               # bias-co
 loss = drag_area_corrected + lambda_reg * torch.norm(z)**2             # minimize corrected drag area
 ```
 
-This is a one-line change. The gradient flows through the affine transform unchanged (just scales by α).
+This is a one-line change. The gradient flows through the affine transform unchanged (just scales by α). Executed on local GPU/CPU in seconds.
 
 **Step 2C: Validate Corrected Champions**
 
-| Run # | Geometry | Why |
-| :---: | :--- | :--- |
-| 7 | Re-optimized Fastback Champion v2 | Validate correction for Fastback |
-| 8 | Re-optimized Estateback Champion v2 | Validate correction for Estateback |
-| 9 | Re-optimized Notchback Champion v2 | Validate correction for Notchback |
-| 10 | *(Optional)* Interpolated latent geometry | Test generalization of correction |
+| Run # | Geometry | Platform | Why |
+| :---: | :--- | :--- | :--- |
+| 7 | Re-optimized Fastback Champion v2 | **Local / Camber / GCP** | Validate correction for Fastback |
+| 8 | Re-optimized Estateback Champion v2 | **Local / Camber / GCP** | Validate correction for Estateback |
+| 9 | Re-optimized Notchback Champion v2 | **Local / Camber / GCP** | Validate correction for Notchback |
+| 10 | *(Optional)* Interpolated latent geometry | **Local / Camber / GCP** | Test generalization of correction |
 
 **Deliverables:**
 - Corrected surrogate parameters ($\alpha$, $\beta$) with residual error
 - Comparison: v1 champions vs v2 champions ($C_dA$ improvement after correction)
 - Updated error statistics
 
-**Timeline:** ~1 week
+**Timeline:** ~1 week (local overnight) or **1–2 days** (cloud batch)
 
 ---
 
@@ -230,11 +232,11 @@ This is a one-line change. The gradient flows through the affine transform uncha
 > [!NOTE]
 > Stage 3 is **conditional**. If Stage 2 residual errors are small ($\Delta C_dA < 0.005\text{ m}^2$), skip the re-correction and use Stage 3 runs purely for final validation and visualization.
 
-| Run # | Geometry | Why |
-| :---: | :--- | :--- |
-| 11 | Final Champion (best overall $C_dA$) | Publication result |
-| 12 | Final Champion (best per-class) | Diversity of optimized shapes |
-| 13 | *(Optional)* Second correction cycle champion | Only if Stage 2 residual $\Delta C_dA > 0.005\text{ m}^2$ |
+| Run # | Geometry | Platform | Why |
+| :---: | :--- | :--- | :--- |
+| 11 | Final Champion (best overall $C_dA$) | **Local / Camber / GCP** | Publication result |
+| 12 | Final Champion (best per-class) | **Local / Camber / GCP** | Diversity of optimized shapes |
+| 13 | *(Optional)* Second correction cycle champion | **Local / Camber / GCP** | Only if Stage 2 residual $\Delta C_dA > 0.005\text{ m}^2$ |
 
 **Deliverables:**
 - Final validated $C_dA$ for publication
@@ -242,27 +244,29 @@ This is a one-line change. The gradient flows through the affine transform uncha
 - Streamline / wake structure plots
 - Comparison table: baseline DrivAerNet $C_dA$ → AI v1 $C_dA$ → AI v2 (corrected) $C_dA$ → Final
 
-**Timeline:** ~3–5 days
+**Timeline:** ~3–5 days (local) or **1 day** (cloud)
 
 ---
 
 ## Total Compute Budget Summary
 
-| Stage | Runs | Wall-Clock per Run | Total Time | Purpose |
-| :---: | :---: | :---: | :---: | :--- |
-| **Stage 1** | 5–6 | 3–5 hrs | ~15–30 hrs | Calibrate + validate |
-| **Stage 2** | 3–4 | 3–5 hrs | ~9–20 hrs | Correct + re-validate |
-| **Stage 3** | 2–3 | 3–5 hrs | ~6–15 hrs | Final validation |
-| **Total** | **10–13** | — | **~30–65 hrs** | **~1–2 weeks of overnight runs** |
+| Stage | Runs | Wall-Clock per Run (8 cores) | Total Compute | Purpose | Recommended Platform |
+| :---: | :---: | :---: | :---: | :--- | :--- |
+| **Stage 1** | 5–6 | 3–5 hrs | ~15–30 hrs | Calibrate + validate | Local (Runs 1–2); Local / Camber / GCP (Runs 3–6) |
+| **Stage 2** | 3–4 | 3–5 hrs | ~9–20 hrs | Correct + re-validate | Local / Camber / GCP (Runs 7–10) |
+| **Stage 3** | 2–3 | 3–5 hrs | ~6–15 hrs | Final validation | Local / Camber / GCP (Runs 11–13) |
+| **Total** | **10–13** | — | **~30–65 core-hrs** | — | **Preserved budget (10–15 runs)** |
 
 > [!TIP]
-> **Overnight batch strategy:** Queue 2 runs per night (each ~4 hours). At 2 runs/night, 13 runs complete in ~7 business days.
+> **Execution Strategy by Workload & Quota:**
+> - **Track A (Zero-Cost Local Baseline):** Queue 1–2 runs per night locally. Entire budget completes in ~1–2 weeks without consuming cloud quotas or credits.
+> - **Track B (Hybrid Cloud Batch — Recommended):** Perform case setup, mesh sanity checks, and initial baseline calibration (Runs 1–2) on the local Ubuntu PC. Then dispatch validated batch runs (Runs 3–6 and 7–10) to **Camber Cloud CPU** (or **GCP Compute**). This compresses total wall-clock turnaround to **2–4 days** while keeping the desktop responsive.
 
 ---
 
-## OpenFOAM Installation & STL Preparation
+## OpenFOAM Setup Across Environments & STL Preparation
 
-### Installation (Ubuntu 24.04)
+### 1. Local Ubuntu Desktop (Primary Development & Mesh Calibration)
 
 ```bash
 # Native OpenFOAM installation (recommended for Ubuntu 24.04)
@@ -275,9 +279,27 @@ sudo add-apt-repository http://dl.openfoam.org/ubuntu
 sudo apt update
 sudo apt install openfoam12  # or latest available version
 
-# Verify
+# Verify local installation
 simpleFoam -help
 ```
+
+### 2. Cloud Execution Options (Automated Batch Runs)
+
+- **Camber Cloud (CPU Engine):**
+  - Use Camber base engine or OpenFOAM container for automated batch runs once the template case is calibrated locally.
+  - Case directories and STL files can be synced via Camber Stash (`stash://nidhithakur24/aerodesign/cfd/`).
+  - Example command pattern:
+    ```bash
+    camber job create --engine base \
+      --command "source /opt/openfoam*/etc/bashrc && ./Allrun"
+    ```
+- **GCP Compute Engine (On-Demand Compute VMs):**
+  - Spin up compute-optimized instances (e.g. `c2-standard-8` or `c3-standard-8` with 8 vCPUs / 32 GB RAM).
+  - Run with native OpenFOAM or standard Docker image:
+    ```bash
+    docker run -it --rm -v $(pwd):/case -w /case opencfd/openfoam-default:latest ./Allrun
+    ```
+  - Allows parallel execution of multiple runs simultaneously when cloud credits are available.
 
 ### STL Geometry Preparation
 
@@ -361,12 +383,12 @@ print(f"Residual std: {np.std(data[:,1] - (alpha * data[:,0] + beta)):.5f} m²")
 
 | Risk | Mitigation |
 | :--- | :--- |
-| **snappyHexMesh OOM** at 16 GB | Use `distributedTriSurfaceMesh` for parallel meshing; limit refinement levels; target ≤ 2.5M cells |
-| **Non-converging simpleFoam** | Start with first-order upwind for 500 iters, then switch to second-order linearUpwind. Use `potentialFoam` for initialization |
-| **Marching Cubes STL has holes** | Run `surfaceCheck` → repair with `surfaceAdd` or external tools (MeshLab/Blender) before meshing |
-| **Surrogate error is non-linear** | If affine residual > 0.01 m², consider per-body-type correction ($\alpha_F, \beta_F$ vs $\alpha_E, \beta_E$) |
-| **Simulation takes > 6 hrs** | Reduce mesh to 1.5M cells. Coarser wake refinement. Acceptable accuracy trade-off for trend analysis |
-| **Frontal area mismatch** | AI-generated shapes may have slightly different $A_{\text{frontal}}$ than training data. Always recompute from the actual STL |
+| **snappyHexMesh OOM at 16 GB** | Baseline mesh designed for ≤ 2.5M cells fits 16 GB with ~8 GB headroom. If memory spikes occur during aggressive boundary layer extrusion, offload mesh generation or full run to Camber Cloud / GCP VM with 32+ GB RAM. |
+| **Non-converging simpleFoam** | Start with first-order upwind for 500 iters, then switch to second-order linearUpwind. Use `potentialFoam` for initialization. Debug locally before queueing in cloud batch. |
+| **Marching Cubes STL has holes** | Run `surfaceCheck` → repair with `surfaceAdd` or external tools (MeshLab/Blender) before meshing. |
+| **Surrogate error is non-linear** | If affine residual > 0.01 m², consider per-body-type correction ($\alpha_F, \beta_F$ vs $\alpha_E, \beta_E$). |
+| **Simulation takes > 6 hrs locally** | Reduce mesh to 1.5M cells (coarser wake refinement), or dispatch case to dedicated GCP `c2-standard-8` or Camber Cloud node for faster clock speeds and unobstructed compute. |
+| **Frontal area mismatch** | AI-generated shapes may have slightly different $A_{\text{frontal}}$ than training data. Always recompute from the actual STL. |
 
 ---
 
@@ -378,7 +400,7 @@ print(f"Residual std: {np.std(data[:,1] - (alpha * data[:,0] + beta)):.5f} m²")
 | Stage 1 surrogate error | Quantified (any value) | Establishes the correction baseline |
 | Stage 2 corrected surrogate residual | $\|\Delta C_dA\| < 0.010\text{ m}^2$ | Affine correction should halve the raw error |
 | Final champion drag area reduction vs baseline | > 5% $\Delta C_dA$ | Demonstrates the AI pipeline produces measurable improvement |
-| Total compute wall-clock | < 80 hours | Fits within 2–3 weeks of overnight runs |
+| Total compute wall-clock | < 80 core-hours | 1–2 weeks via local overnight runs OR 2–4 days via Camber/GCP batch runs |
 
 ---
 
