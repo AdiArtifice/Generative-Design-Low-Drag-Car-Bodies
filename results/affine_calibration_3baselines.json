@@ -1,0 +1,28 @@
+{
+  "alpha_slope": 0.8404,
+  "beta_intercept": -0.1642,
+  "r_squared": 0.9770,
+  "baselines": [
+    {
+      "name": "Fastback (F_S_WWC_WM_101)",
+      "cfd_cda_m2": 0.8006,
+      "true_dataset_cda_m2": 0.49565,
+      "calibrated_cda_m2": 0.5086,
+      "error_percent": 2.62
+    },
+    {
+      "name": "Estateback (E_S_WWC_WM_014)",
+      "cfd_cda_m2": 0.9186,
+      "true_dataset_cda_m2": 0.6296,
+      "calibrated_cda_m2": 0.6078,
+      "error_percent": 3.46
+    },
+    {
+      "name": "Notchback (N_S_WWC_WM_025)",
+      "cfd_cda_m2": 1.0929,
+      "true_dataset_cda_m2": 0.7455,
+      "calibrated_cda_m2": 0.7543,
+      "error_percent": 1.18
+    }
+  ]
+}
