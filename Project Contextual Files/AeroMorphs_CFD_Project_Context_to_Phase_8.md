@@ -2427,19 +2427,20 @@ They define the intended future architecture, compute strategy, correction model
 OpenFOAM 2412                 WORKING
 Notchback baseline            WORKING
 Automation pipeline           WORKING
-3000-iteration medium run    COMPLETE
-3000-iteration coarse run    COMPLETE
-Residual spot-check          COMPLETE
-Mesh sensitivity             DEMONSTRATED
-Fine mesh configuration      READY
-Fine CFD result              PENDING CONFIRMATION
-Absolute CdA validation      PENDING
-Different STL test           PENDING
-Template generalization      PENDING
-Phase 7 full validation      PENDING
-Phase 8 implementation       PENDING
+3000-iteration medium run    COMPLETE (414,139 cells, CdA = 1.0929 m²)
+3000-iteration coarse run    COMPLETE (152,209 cells, CdA = 1.1604 m²)
+3000-iteration fine run      COMPLETE (1,151,572 cells, CdA = 1.0733 m²)
+Mesh sensitivity / study     COMPLETE (Asymptotic convergence: 1.80% delta; Medium frozen)
+Different STL test           COMPLETE (Estateback E_S_WWC_WM_014, CdA = 0.9186 m²)
+AI STL 1:1 Scale Fix         COMPLETE (scripts/denormalize_mesh.py implemented)
+First AI Champion Validation COMPLETE (step_250_1to1_scale: predicted 0.4814 vs CFD 1.0873 m²)
+GCP Backend Parity Benchmark COMPLETE (c2-standard-8: exact 0.000% parity, 56.6 min, auto-cleanup)
+GCP Compute Engine Role      PROMOTED TO PRIMARY MVP BACKEND
+Absolute CdA calibration     READY (Stage 1 Affine Model fitting next)
+Phase 7 full validation      IN PROGRESS (Stage 1 calibration batch)
+Phase 8 implementation       PENDING (Awaiting Stage 1 affine parameters)
 ```
 
-The safest immediate continuation is therefore:
+The validated next operational step is:
 
-> **Finish the fine mesh run, compare the three mesh levels, and only then decide which CFD configuration to freeze for the next validation stage.**
+> **Execute the Phase 7 Stage 1 calibration batch on GCP Compute Engine to populate the Evidence Store, compute the Affine Correction parameters ($\alpha, \beta$), and re-optimize the AI surrogate.**

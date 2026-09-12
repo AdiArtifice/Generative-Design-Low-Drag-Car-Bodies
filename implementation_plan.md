@@ -81,27 +81,38 @@
 
 > **Detailed Execution Document:** `Project Contextual Files/phase7_cfd_implementation_plan.md`
 
-### Hybrid Local + Cloud Strategy
+### Compute Strategy: GCP Primary + Local Fallback
 
-CFD is structured around a flexible multi-platform strategy rather than a single bottlenecked desktop:
-1. **Local Ubuntu PC (Intel i7-12700, 16 GB RAM):** Primary environment for initial OpenFOAM case setup, mesh refinement debugging (`snappyHexMesh`), visual inspection in ParaView, and baseline calibration (Runs 1–2).
-2. **Camber Cloud (CPU Engine):** Automated batch runner for validated cases (Runs 3–6 and 7–10) utilizing monthly compute quota and avoiding local desktop lockup.
-3. **GCP Compute Engine (e.g., `c2-standard-8`):** Elastic burst compute for running concurrent simulation sweeps when cloud credits are available or turnaround speed is critical.
+CFD validation operates across a proven dual-platform architecture:
+1. **GCP Compute Engine (`c2-standard-8`) — Primary MVP Backend:**
+   - Officially promoted to primary backend following successful Milestone 1 Parity Benchmark.
+   - Verified 100.000% numerical parity against local workstation down to 5 decimal places.
+   - Autonomous execution: GCS staging → Spot/On-Demand VM launch → 3,000 iterations in ~56.6 min → GCS upload → guaranteed self-teardown and local watchdog deletion (~$0.31/run on-demand, ~$0.05/run spot).
+   - Leaves local workstation unencumbered (0% local CPU load).
+2. **Local Ubuntu Desktop (Intel i7-12700, 16 GB RAM) — Reference & Fallback:**
+   - Kept in `/home/student/AeroMorphs/cfd_automation` on native ext4 as the golden numerical reference and offline fallback.
 
 ### Preserved Simulation Budget & 3-Stage Workflow
 
 | Stage | Focus | Runs | Platforms | Deliverables |
 | :---: | :--- | :---: | :--- | :--- |
-| **Stage 1** | Mesh Calibration & AI Champion Validation | 5–6 | Local PC (Runs 1–2); Local / Camber / GCP (Runs 3–6) | Calibrated CFD setup matching published DrivAerNet baselines; initial AI surrogate error $\Delta C_dA$. |
-| **Stage 2** | Affine Bias Correction & Re-Optimization | 3–4 | Local Optimizer + Local / Camber / GCP (Runs 7–10) | Affine correction parameters ($\alpha, \beta$); re-optimized v2 champion geometries. |
-| **Stage 3** | Final Closed-Loop Validation | 2–3 | Local / Camber / GCP (Runs 11–13) | Final publication-grade drag area verification; ParaView surface pressure and wake flow visualizations. |
-| **Total** | **Strictly Resource-Bounded** | **10–13** | **Hybrid Local + Cloud** | **~30–65 core-hours total** |
+| **Stage 1** | Mesh Calibration & AI Champion Validation | 5–6 | GCP Primary (Local Fallback) | Calibrated CFD setup matching published DrivAerNet baselines; initial AI surrogate error $\Delta C_dA$. |
+| **Stage 2** | Affine Bias Correction & Re-Optimization | 3–4 | Local Optimizer + GCP Primary | Affine correction parameters ($\alpha, \beta$); re-optimized v2 champion geometries. |
+| **Stage 3** | Final Closed-Loop Validation | 2–3 | GCP Primary (Local Fallback) | Final publication-grade drag area verification; ParaView surface pressure and wake flow visualizations. (Optional single 2M+ fine mesh run on final winner for publication graphics). |
+| **Total** | **Strictly Resource-Bounded** | **10–13** | **GCP Primary + Local Fallback** | **~10–15 total lifetime runs preserved (< $3.00 cloud spend)** |
+
+### Completed Milestones in Phase 7
+- [x] **Production Mesh Frozen:** Standardized on Medium `level (3 4)` (~414k cells) after 3-tier study proved asymptotic convergence (1.80% delta vs. 1.15M Fine mesh).
+- [x] **Local Python CFD Bridge:** Built `scripts/openfoam_runner.py` to execute outside the encrypted Cryptomator FUSE mount.
+- [x] **Baseline Robustness Test:** Estateback baseline (`E_S_WWC_WM_014`) converged cleanly in 60 min ($C_dA = 0.9186\text{ m}^2$, +45.9% systematic offset vs. dataset).
+- [x] **AI Mesh 1:1 Scale Denormalizer:** Built `scripts/denormalize_mesh.py` to fix Marching Cubes unit-box normalization (`[-0.5, 0.5]` $\rightarrow$ 4.5m real vehicle scale).
+- [x] **First AI Validation Point:** Evaluated `optimized_car_step_250_1to1_scale.stl` ($C_dA = 1.0873\text{ m}^2$), uncovering +18.36% drag increase vs. surrogate's -26.35% prediction, empirically proving surrogate exploitation ("surrogate hacking") and validating the necessity of Affine Calibration.
+- [x] **GCP Primary Backend Setup & Benchmark:** Provisioned GCP Compute Engine `c2-standard-8`, verified exact 0.000% numerical parity, automated teardown, and cost governance.
 
 ### Immediate Next Action Items for Phase 7
-
-1. **Revert Mesh Configuration:** Revert `system/snappyHexMeshDict` in the native ext4 CFD environment (`/home/student/AeroMorphs/cfd_automation`) back to the optimal Medium mesh `level (3 4)`.
-2. **Build Python CFD Bridge:** Build `scripts/openfoam_runner.py` to wrap Nidhi's automated bash scripts, ensuring OpenFOAM execution stays outside the encrypted FUSE mount.
-3. **Execute Different-STL Robustness Test:** Run the bridge with a new STL to prove automation robustness.
+1. **Phase 7 Stage 1 Calibration Runs on GCP:** Run baseline Fastback (`F_S_WWC_WM_...`) and additional AI champion geometries on GCP to populate the initial calibration set.
+2. **Fit Affine Correction Model:** Calculate $(\alpha, \beta)$ parameters via least squares from $(C_dA_{\text{surrogate}}, C_dA_{\text{CFD}})$ pairs to seed the Evidence Store (`metadata/cfd_evidence_store.json`).
+3. **Execute Stage 2 Re-Optimization:** Inject $(\alpha, \beta)$ into `scripts/optimize_latent_shape.py` loss function and generate v2 calibrated champion shapes.
 
 ---
 

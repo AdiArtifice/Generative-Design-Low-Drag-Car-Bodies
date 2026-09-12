@@ -13,13 +13,13 @@ CFD validation is structured as a **hybrid local + cloud pipeline**. Rather than
 
 | Platform | Compute Specs | Cost / Quota Profile | Primary Role & Strengths | When to Select |
 | :--- | :--- | :--- | :--- | :--- |
-| **Local Ubuntu PC** *(Primary Bed)* | Intel i7-12700 (12C/20T, 8 dedicated cores), 16 GB RAM, 512 GB SSD | **Zero additional cost** | • Initial CFD template setup & script authoring<br>• Mesh parameter debugging & `snappyHexMesh` visual inspection<br>• Baseline mesh calibration (Runs 1–2)<br>• Interactive convergence troubleshooting in ParaView | Default for all setup, debugging, and initial calibration runs. |
-| **Camber Cloud (CPU)** *(Batch Runner)* | Dedicated Cloud CPU Nodes (e.g., 8–16 vCPUs, 32–64 GB RAM) | Uses available monthly Camber compute credits / quotas | • Asynchronous batch processing of validated cases<br>• Frees local desktop for development and model training<br>• Extra RAM headroom prevents meshing OOM spikes | Automated batch runs (Runs 3–6, 7–10) when local PC is in use or overnight runs are offloaded. |
-| **GCP Compute Engine** *(Elastic Burst)* | Compute-Optimized VMs (e.g., `c2-standard-8` or `c3-standard-8`, 8 vCPUs, 32 GB RAM) | On-demand cloud billing or credits (~$0.30–$0.40/hr) | • Highly elastic parallel batch execution<br>• Fast multi-case sweeps when turnaround is critical<br>• Direct integration with cloud storage buckets | Multiple concurrent simulation runs or when Camber monthly quota is exhausted. |
+| **GCP Compute Engine** *(Primary MVP Backend)* | Compute-Optimized VMs (`c2-standard-8`, 8 vCPUs, 32 GB RAM, 50 GB SSD) | On-demand cloud billing (~$0.31/run) or Spot (~$0.05/run) | • **Primary Production Backend:** Verified 100.000% numerical parity against local desktop.<br>• Automated ephemeral lifecycle (GCS staging → VM run → self-teardown → watchdog deletion).<br>• Zero local machine lockup (0% local CPU load). | **Default for all production calibration and AI champion validation runs.** |
+| **Local Ubuntu PC** *(Reference & Fallback)* | Intel i7-12700 (12C/20T, serial/single-core CFD), 16 GB RAM, NVMe SSD | Zero additional cost | • Golden numerical reference and offline fallback.<br>• Initial CFD template authoring & local script debugging.<br>• Interactive mesh and flow visualization in ParaView. | Baseline reference calibration and offline debugging. |
+| **Camber Cloud (CPU)** *(Batch Option)* | Dedicated Cloud CPU Nodes (e.g., 8–16 vCPUs, 32–64 GB RAM) | Uses available monthly Camber compute credits / quotas | • Secondary batch option for running alternative cases.<br>• Extra RAM headroom prevents meshing OOM spikes. | Secondary batch fallback. |
 
 > [!IMPORTANT]
 > **Total CFD Budget: 10–15 simulations (Strictly Preserved).**
-> Adding cloud options does **not** increase the simulation budget. CFD remains a sparse, high-value validation tool. At ~2–4 hours per run on 8 cores (local or cloud), this represents ~25–50 core-hours total. Every simulation must be justified.
+> Adding cloud execution does **not** increase the simulation budget. CFD remains a sparse, high-value validation tool. At ~56 minutes per run on GCP ($C2$), this represents < $3.00 total cloud spend. Every simulation must be justified.
 
 ---
 
@@ -93,22 +93,23 @@ For AI-generated champion geometries (which have no metadata entry), we compute 
 | :--- | :--- | :--- |
 | **Mesher** | `snappyHexMesh` | Native OpenFOAM. Well-supported for automotive |
 | **Background Mesh** | `blockMesh` ~0.5M cells | Coarse rectangular grid |
-| **Surface Refinement** | Level 4–5 on car body | Captures curvature |
+| **Surface Refinement** | Medium `level (3 4)` on car body | Production standard: captures curvature with 414k cells |
 | **Wake Refinement** | Level 3 box extending 3L downstream | Critical for drag prediction |
-| **Prism Layers** | 3–5 layers, expansion ratio 1.3 | Wall-function compatible |
-| **Target Cell Count** | **~2M cells** (half-car) | ≡ ~4M full-car equivalent. Fits in 16 GB with ~8–10 GB headroom |
-| **Estimated Memory** | ~4–5 GB for solver, ~6–8 GB peak for meshing | Leaves room for OS |
+| **Prism Layers** | 3–5 layers, expansion ratio 1.3 | Wall-function compatible ($y^+ \approx 30\text{–}100$) |
+| **Target Cell Count** | **~414k cells** (`level (3 4)`) | Established baseline: 3-tier study proved asymptotic convergence (1.80% delta vs. 1.15M Fine mesh) |
+| **Optional Fine Mesh** | **~1.15M – 2.0M cells** (`level (4 5)`) | Reserved exclusively for final champion publication spotlight; unproven for ranking sensitivity |
+| **Estimated Memory** | ~4.5 GB for solver, ~6 GB peak for meshing | Fits easily in 16 GB local and 32 GB GCP VM |
 
 ### Time Estimates Per Simulation
 
-| Phase | Estimated Time | Cores |
-| :--- | :--- | :--- |
-| `blockMesh` | ~1 min | 1 |
-| `snappyHexMesh` | 20–40 min | 8 |
-| `decomposePar` | 2–5 min | 1 |
-| `simpleFoam` (3000 iters) | **2–4 hours** | 8 |
-| Post-processing (`forceCoeffs` → $C_dA$) | 5 min | 1 |
-| **Total per simulation** | **~3–5 hours** | — |
+| Phase | Estimated Time (Local CPU) | Estimated Time (GCP `c2-standard-8`) | Notes |
+| :--- | :---: | :---: | :--- |
+| `blockMesh` | ~1 min | < 30 sec | Fast rectangular background |
+| `snappyHexMesh` | ~3–5 min | ~2 min | Medium `(3 4)` refinement |
+| `checkMesh` | ~1 min | < 30 sec | Topology & orthogonality verification |
+| `simpleFoam` (3000 iters) | **~50–55 min** | **~52–54 min** | Single-core serial execution |
+| Post-processing & Cleanup | ~1 min | ~1 min | GCS upload + auto-teardown |
+| **Total per simulation** | **~59 minutes** | **~56.6 minutes** | **GCP cost: ~$0.31 (On-Demand) / ~$0.05 (Spot)** |
 
 ---
 
@@ -303,20 +304,19 @@ simpleFoam -help
 
 ### STL Geometry Preparation
 
-The AI-generated meshes from `optimization_output/` are Marching Cubes STLs. They need preparation:
+The AI-generated meshes from `optimization_output/` are Marching Cubes STLs generated in the normalized `[-0.5, 0.5]` unit bounding box space. They require preparation before meshing:
 
-1. **Scale to physical dimensions:** The meshes are normalized to unit bounding box. Scale to real DrivAerNet dimensions (~4.6m length for Fastback).
-2. **Repair mesh defects:** Marching Cubes can produce non-manifold edges. Run through `surfaceCheck` and `surfaceConvert`.
-3. **Orient normals outward:** Required for `snappyHexMesh` to determine inside/outside.
-4. **Position on ground plane:** Place the car on $z = 0$ with front at $x = 0$.
-5. **Compute frontal area:** Project STL onto YZ-plane to get $A_{\text{frontal}}$ for $C_dA = C_d \times A_{\text{frontal}}$.
-
-```bash
-# OpenFOAM surface utilities
-surfaceCheck car_champion.stl        # Validate topology
-surfaceOrient car_champion.stl car_oriented.stl "(0 0 1)"  # Orient normals
-surfaceTransformPoints -translate '(-0.5 0 0)' car_oriented.stl car_positioned.stl
-```
+1. **Scale to 1:1 physical dimensions (Implemented):**
+   - Built and verified [`scripts/denormalize_mesh.py`](file:///home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main%20Project%20Folder/scripts/denormalize_mesh.py) to scale unit meshes up to real DrivAerNet dimensions (~4.53m length, 2.26m width, 1.34m height) and match the reference car ground placement.
+   - Example command:
+     ```bash
+     python3 scripts/denormalize_mesh.py \
+       --input optimization_output/optimized_car_step_250.stl \
+       --ref temp_raw_stl/E_S_WWC_WM_014.stl \
+       --output optimization_output/optimized_car_step_250_1to1_scale.stl
+     ```
+2. **Watertight & Normal Verification:** Marching Cubes produces clean, watertight triangulations with outward-facing normals.
+3. **Compute frontal area:** Project STL onto YZ-plane to get $A_{\text{frontal}}$ for $C_dA = C_d \times A_{\text{frontal}}$.
 
 ### Computing Frontal Area from STL
 
