@@ -212,11 +212,12 @@ def optimize(args):
     z_opt = torch.nn.Parameter(z_initial.clone())
     optimizer = torch.optim.Adam([z_opt], lr=args.lr)
     
-    os.makedirs("optimization_output", exist_ok=True)
+    out_dir = args.out_dir if args.out_dir else (f"optimization_output/{baseline_id}" if args.car_id else "optimization_output")
+    os.makedirs(out_dir, exist_ok=True)
     
     # Export step 0 (baseline)
-    print("Exporting initial mesh (Step 0)...")
-    success = extract_mesh(vae, z_opt, "optimization_output/optimized_car_step_0.stl", device, grid_res=args.grid_res, c_emb=c_emb)
+    print(f"Exporting initial mesh (Step 0) to {out_dir}...")
+    success = extract_mesh(vae, z_opt, f"{out_dir}/optimized_car_step_0.stl", device, grid_res=args.grid_res, c_emb=c_emb)
     if not success:
         print("[Warning] Initial mesh reconstruction failed.")
     
@@ -245,7 +246,7 @@ def optimize(args):
             print(f"Step {step:03d} | Loss: {loss.item():.4f} | Drag: {pred_drag.item():.4f} m^2 | Penalty: {similarity_penalty.item():.4f}")
             
         if step % 50 == 0 or step == args.steps:
-            output_path = f"optimization_output/optimized_car_step_{step}.stl"
+            output_path = f"{out_dir}/optimized_car_step_{step}.stl"
             print(f"  -> Exporting intermediate mesh: {output_path}")
             success = extract_mesh(vae, z_opt, output_path, device, grid_res=args.grid_res, threshold=0.5, c_emb=c_emb)
             if not success:
@@ -259,7 +260,7 @@ def optimize(args):
     print("\nOptimization Complete!")
     print(f"Final Predicted Drag Area: {final_pred_drag:.4f} m^2 (Baseline: {initial_pred_drag:.4f} m^2)")
     print(f"Theoretical Drag Reduction: {reduction:.2f}%")
-    print(f"Check the 'optimization_output' folder for STL files.")
+    print(f"Check the '{out_dir}' folder for STL files.")
     
     # Save optimization summary for downstream tools (e.g., visualizer)
     summary = {
@@ -274,7 +275,7 @@ def optimize(args):
         "lr": args.lr,
         "z_clamp": args.z_clamp,
     }
-    summary_path = "optimization_output/optimization_summary.json"
+    summary_path = f"{out_dir}/optimization_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"Saved optimization summary to {summary_path}")
@@ -282,6 +283,7 @@ def optimize(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--car_id", type=str, default=None, help="ID of baseline car to optimize (e.g. E_S_WWC_WM_014)")
+    parser.add_argument("--out_dir", type=str, default=None, help="Directory to save output meshes and summary")
     parser.add_argument("--steps", type=int, default=250, help="Number of optimization steps")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate for Adam optimizer")
     parser.add_argument("--lambda_reg", type=float, default=0.01, help="Squared-L2 penalty weight to preserve core structure")
