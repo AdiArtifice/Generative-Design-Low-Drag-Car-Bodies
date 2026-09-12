@@ -1,0 +1,10 @@
+{
+    "mean_drag_force_N": 738.5604904761905,
+    "std_drag_force_N": 7.432355843133235,
+    "cda_m2": 1.3397922729726812,
+    "velocity_mps": 30.0,
+    "density_kg_m3": 1.225,
+    "averaging_start_iteration": 2800,
+    "averaging_end_iteration": 3000,
+    "samples": 21
+}
