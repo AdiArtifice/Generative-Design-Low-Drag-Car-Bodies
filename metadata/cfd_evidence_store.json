@@ -1,0 +1,81 @@
+{
+  "version": "1.0",
+  "created_at": "2026-09-12T16:00:00Z",
+  "description": "AeroMorphs Phase 7 Stage 1 CFD Ground-Truth Evidence Store",
+  "mesh_resolution": "Medium level (3 4), ~350k-415k cells",
+  "solver": "OpenFOAM 2412 simpleFoam (3000 iterations, k-omega SST, 30 m/s moving ground)",
+  "entries": [
+    {
+      "id": "F_S_WWC_WM_101",
+      "category": "Baseline",
+      "body_type": "Fastback",
+      "drivaer_truth_cda": 0.49565,
+      "surrogate_pred_cda": 0.5205,
+      "cfd_drag_force_N": 441.3286,
+      "cfd_cda": 0.80060,
+      "cfd_std_N": 2.3637,
+      "cells": 383173
+    },
+    {
+      "id": "E_S_WWC_WM_014",
+      "category": "Baseline",
+      "body_type": "Estateback",
+      "drivaer_truth_cda": 0.62960,
+      "surrogate_pred_cda": 0.6536,
+      "cfd_drag_force_N": 506.3888,
+      "cfd_cda": 0.91862,
+      "cfd_std_N": 2.1812,
+      "cells": 401219
+    },
+    {
+      "id": "N_S_WWC_WM_025",
+      "category": "Baseline",
+      "body_type": "Notchback",
+      "drivaer_truth_cda": 0.74550,
+      "surrogate_pred_cda": 0.6939,
+      "cfd_drag_force_N": 602.4812,
+      "cfd_cda": 1.09291,
+      "cfd_std_N": 1.8421,
+      "cells": 414139
+    },
+    {
+      "id": "AI_F_S_WWC_WM_101_step250",
+      "category": "AI_Champion_v1",
+      "body_type": "Fastback",
+      "baseline_id": "F_S_WWC_WM_101",
+      "surrogate_pred_cda": 0.4804,
+      "surrogate_claimed_reduction_pct": -7.70,
+      "cfd_drag_force_N": 549.6831,
+      "cfd_cda": 0.99716,
+      "cfd_std_N": 9.5849,
+      "real_drag_change_vs_baseline_pct": 24.55,
+      "cells": 348943
+    },
+    {
+      "id": "AI_E_S_WWC_WM_014_step250",
+      "category": "AI_Champion_v1",
+      "body_type": "Estateback",
+      "baseline_id": "E_S_WWC_WM_014",
+      "surrogate_pred_cda": 0.4814,
+      "surrogate_claimed_reduction_pct": -26.35,
+      "cfd_drag_force_N": 599.3706,
+      "cfd_cda": 1.08729,
+      "cfd_std_N": 17.0389,
+      "real_drag_change_vs_baseline_pct": 18.36,
+      "cells": 414139
+    },
+    {
+      "id": "AI_N_S_WWC_WM_025_step250",
+      "category": "AI_Champion_v1",
+      "body_type": "Notchback",
+      "baseline_id": "N_S_WWC_WM_025",
+      "surrogate_pred_cda": 0.4817,
+      "surrogate_claimed_reduction_pct": -30.59,
+      "cfd_drag_force_N": 738.5605,
+      "cfd_cda": 1.33979,
+      "cfd_std_N": 7.4324,
+      "real_drag_change_vs_baseline_pct": 22.59,
+      "cells": 372731
+    }
+  ]
+}
