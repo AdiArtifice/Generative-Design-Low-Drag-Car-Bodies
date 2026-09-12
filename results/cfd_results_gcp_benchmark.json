@@ -1,0 +1,14 @@
+{
+  "mean_drag_force_N": 599.3705952380952,
+  "std_drag_force_N": 17.038948235355363,
+  "cda_m2": 1.0872935968038009,
+  "velocity_mps": 30.0,
+  "density_kg_m3": 1.225,
+  "averaging_start_iteration": 2800,
+  "averaging_end_iteration": 3000,
+  "samples": 21,
+  "job_id": "notchback_benchmark_1789194201",
+  "backend": "gcp_c2_standard_8_ondemand",
+  "wall_time_seconds": 3398,
+  "instance_type": "c2-standard-8"
+}

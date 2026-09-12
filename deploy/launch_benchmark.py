@@ -176,9 +176,9 @@ def main():
     LOCAL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_results_file = LOCAL_RESULTS_DIR / f"cfd_results_gcp_{job_id}.json"
     
-    dl_res = run_cmd(f"gcloud storage cp {BUCKET}/jobs/{job_id}/cfd_results.json {out_results_file}", check=False)
-    run_cmd(f"gcloud storage cp {BUCKET}/jobs/{job_id}/status.json {LOCAL_RESULTS_DIR}/status_{job_id}.json", check=False)
-    run_cmd(f"gcloud storage cp {BUCKET}/jobs/{job_id}/cfd_job.log {LOCAL_RESULTS_DIR}/cfd_job_{job_id}.log", check=False)
+    dl_res = run_cmd(f"gcloud storage cp '{BUCKET}/jobs/{job_id}/cfd_results.json' '{out_results_file}'", check=False)
+    run_cmd(f"gcloud storage cp '{BUCKET}/jobs/{job_id}/status.json' '{LOCAL_RESULTS_DIR}/status_{job_id}.json'", check=False)
+    run_cmd(f"gcloud storage cp '{BUCKET}/jobs/{job_id}/cfd_job.log' '{LOCAL_RESULTS_DIR}/cfd_job_{job_id}.log'", check=False)
     
     if dl_res.returncode != 0 or not out_results_file.exists():
         print("[ERROR] Failed to retrieve cfd_results.json from GCS. Check cfd_job.log for details.")
