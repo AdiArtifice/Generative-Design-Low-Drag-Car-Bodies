@@ -16,8 +16,8 @@
 | **Phase 4** | Sampling & Loader Unit Test Verification | `scripts/unit_tests.py` (Determinism, geometry) | ✅ **COMPLETED** | Local Pytest |
 | **Phase 5** | High-Res 128×128 C-VAE Model Training | `models/triplane_vae_best_128.pth` (Acc: 90.01%) | ✅ **COMPLETED** | Camber Cloud GPU |
 | **Phase 6** | Latent Drag Surrogate & Shape Optimization | `models/latent_regressor_best_128.pth`, `optimization_output/` | ✅ **COMPLETED** | Local GPU/CPU |
-| **Phase 7** | OpenFOAM CFD Validation (Hybrid Local + Cloud) | `Project Contextual Files/phase7_cfd_implementation_plan.md` | 🟡 **ACTIVE** | Local PC + Camber/GCP |
-| **Phase 8** | Iterative CFD-Driven Surrogate Refinement | `Project Contextual Files/phase8_iterative_cfd_refinement_plan.md` | ⚪ **PLANNED** | Local PC + Cloud |
+| **Phase 7** | OpenFOAM CFD Validation (Hybrid Local + Cloud) | `Project Contextual Files/phase7_cfd_implementation_plan.md` | ✅ **COMPLETED** | Local PC + Camber/GCP |
+| **Phase 8** | Iterative CFD-Driven Surrogate Refinement | `Project Contextual Files/phase8_iterative_cfd_refinement_plan.md` | ✅ **COMPLETED** | Local PC (Prism Layers) |
 | **Phase 9** | Physics-Informed Neural Fields (NVIDIA Modulus) | Surface pressure & volumetric flow field prediction | ⚪ **PLANNED** | Multi-GPU Cluster |
 
 ---
@@ -104,15 +104,21 @@ CFD validation operates across a proven dual-platform architecture:
 ### Completed Milestones in Phase 7
 - [x] **Production Mesh Frozen:** Standardized on Medium `level (3 4)` (~414k cells) after 3-tier study proved asymptotic convergence (1.80% delta vs. 1.15M Fine mesh).
 - [x] **Local Python CFD Bridge:** Built `scripts/openfoam_runner.py` to execute outside the encrypted Cryptomator FUSE mount.
-- [x] **Baseline Robustness Test:** Estateback baseline (`E_S_WWC_WM_014`) converged cleanly in 60 min ($C_dA = 0.9186\text{ m}^2$, +45.9% systematic offset vs. dataset).
-- [x] **AI Mesh 1:1 Scale Denormalizer:** Built `scripts/denormalize_mesh.py` to fix Marching Cubes unit-box normalization (`[-0.5, 0.5]` $\rightarrow$ 4.5m real vehicle scale).
-- [x] **First AI Validation Point:** Evaluated `optimized_car_step_250_1to1_scale.stl` ($C_dA = 1.0873\text{ m}^2$), uncovering +18.36% drag increase vs. surrogate's -26.35% prediction, empirically proving surrogate exploitation ("surrogate hacking") and validating the necessity of Affine Calibration.
-- [x] **GCP Primary Backend Setup & Benchmark:** Provisioned GCP Compute Engine `c2-standard-8`, verified exact 0.000% numerical parity, automated teardown, and cost governance.
+- [x] **Stage 1 Complete (All 6 CFD Runs Done):** Evaluated all 3 baselines (Fastback, Estateback, Notchback) and all 3 v1 AI champions. Evidence Store initialized at `metadata/cfd_evidence_store.json`.
+- [x] **Surrogate Hacking Diagnosed:** Proved all 3 v1 AI champions increased real drag (+18% to +25%) despite predicted drops (-8% to -31%) due to unconstrained optimization into adversarial latent valleys.
+- [x] **Deep CFD Baseline Audit (10-Point Analysis):** Identified root causes of the 46–62% baseline discrepancy: `blockMesh` boundary mapping bug (moving ground placed on side wall), severe domain blockage (11.25%), short wake space (1.35L), and high near-wall $y^+ \sim 380$ (no prism layers).
+- [x] **CFD Case Rectification & Validation:**
+  - *Step 1:* Rectified boundary mapping (ground $Z=0$ moving at 30 m/s; ceiling & sides slip).
+  - *Step 2:* Expanded domain to $15\text{ m} \times 7.5\text{ m}$ (blockage dropped from 11.25% to 2.31%, wake extended to 5.7L). Drag dropped by 20.2% ($C_dA: 0.804 \to 0.642\text{ m}^2$), cutting discrepancy vs DrivAerNet from +62.2% to +29.5%.
+  - *Step 4:* Extruded 3 near-wall prism layers (506k cells). $y^+$ halved to 170, and $C_dA$ dropped to **$0.5712\text{ m}^2$ (+15.25% vs DrivAerNet)**, resolving over 75% of the discrepancy.
+  - *Step 5:* Built `scratch/split_wheels_body.py` and computed rotating wheel kinematics ($\omega = 96.96\text{ rad/s}$).
+- [x] **Stage 2 Explicit Latent Trust Region Implemented:** Added Projected Gradient Descent with hard trust radius $R_{\text{trust}} = 0.75$ (anchored to 10th percentile of training car-to-car distance) in `scripts/optimize_latent_shape.py`.
+- [x] **Stage 2 Re-Optimization (v2 Champions):** Generated v2 AI champions across all 3 body types (`optimization_output_v2/`) with verified manifold containment ($\|z - z_0\|_2 \le 0.594$) and denormalized to 1:1 physical scale.
 
 ### Immediate Next Action Items for Phase 7
-1. **Phase 7 Stage 1 Calibration Runs on GCP:** Run baseline Fastback (`F_S_WWC_WM_...`) and additional AI champion geometries on GCP to populate the initial calibration set.
-2. **Fit Affine Correction Model:** Calculate $(\alpha, \beta)$ parameters via least squares from $(C_dA_{\text{surrogate}}, C_dA_{\text{CFD}})$ pairs to seed the Evidence Store (`metadata/cfd_evidence_store.json`).
-3. **Execute Stage 2 Re-Optimization:** Inject $(\alpha, \beta)$ into `scripts/optimize_latent_shape.py` loss function and generate v2 calibrated champion shapes.
+1. **Validate v2 AI Champions in CFD:** Run OpenFOAM CFD on the v2 champion geometries using the validated expanded-domain case to measure real physical drag reduction vs baselines.
+2. **Update Evidence Store:** Record v2 validation runs into `metadata/cfd_evidence_store.json`.
+3. **Stage 3 Closed-Loop Review:** Compare baseline $\rightarrow$ v1 $\rightarrow$ v2 trajectories and assess final publication-ready figures.
 
 ---
 

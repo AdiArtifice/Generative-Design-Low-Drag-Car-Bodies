@@ -174,42 +174,36 @@ For AI-generated champion geometries (which have no metadata entry), we compute 
 └──────────────────────────┘
 ```
 
-**Purpose:** Close the feedback loop once using sparse CFD data.
+**Purpose:** Close the feedback loop using validated CFD rectification and explicit latent trust region constraints.
 
-**Step 2A: Fit Affine Correction Model**
+**Step 2A: CFD Audit & Case Rectification (Completed)**
+An exhaustive 10-point audit proved that the initial 46–62% baseline discrepancy was driven by numerical and setup factors:
+- `blockMesh` boundary mapping bug (moving wall assigned to side wall; ground was slip). Rectified in Step 1.
+- Severe domain blockage (11.25%) and short wake space (1.35L). Resolved in Step 2 by expanding domain to $15\text{ m} \times 7.5\text{ m}$ (blockage dropped to 2.31%, wake extended to 5.7L), reducing drag by 20.2% ($C_dA: 0.804 \to 0.642\text{ m}^2$) and halving the discrepancy.
+- High near-wall $y^+ \sim 380$. Resolved in Step 4 by extruding 3 prism layers (506k cells), bringing $y^+$ down to 170 and $C_dA$ to **$0.5712\text{ m}^2$ (+15.25% vs DrivAerNet benchmark)**.
 
-Using Stage 1 data points (3–5 pairs of $(C_dA_{\text{surrogate}}, C_dA_{\text{CFD}})$):
+**Step 2B: Explicit Latent Trust Region Optimization (Completed)**
+To eliminate surrogate hacking, `scripts/optimize_latent_shape.py` was upgraded from unconstrained soft penalty to an **explicit hard trust region ball** via Projected Gradient Descent:
+$$\|z - z_{\text{initial}}\|_2 \le R_{\text{trust}} = 0.75$$
+Anchored to the empirical 10th percentile of car-to-car distance in the training set ($1.08$), this strictly locks the latent code inside the high-density vehicle manifold.
 
-$$C_dA_{\text{corrected}} = \alpha \cdot C_dA_{\text{surrogate}} + \beta$$
+All 3 v2 AI champions were generated in `optimization_output_v2/` and denormalized to 1:1 scale:
+- Fastback v2: $\|z - z_0\|_2 = 0.358$ (pred drag: $0.4804\text{ m}^2$, -7.7%)
+- Estateback v2: $\|z - z_0\|_2 = 0.516$ (pred drag: $0.4814\text{ m}^2$, -26.4%)
+- Notchback v2: $\|z - z_0\|_2 = 0.594$ (pred drag: $0.4817\text{ m}^2$, -30.6%)
 
-This is the most statistically robust correction possible with $O(5)$ data points. More complex models (GP, neural net) would overfit.
-
-**Step 2B: Re-Optimize with Corrected Surrogate**
-
-Modify `optimize_latent_shape.py` to apply the affine correction during gradient descent:
-
-```python
-# In the optimization loop
-drag_area_predicted = regressor(z)                                     # raw surrogate (normalized)
-drag_area_corrected = alpha * drag_area_predicted + beta               # bias-corrected
-loss = drag_area_corrected + lambda_reg * torch.norm(z)**2             # minimize corrected drag area
-```
-
-This is a one-line change. The gradient flows through the affine transform unchanged (just scales by α). Executed on local GPU/CPU in seconds.
-
-**Step 2C: Validate Corrected Champions**
+**Step 2C: Validate Corrected v2 Champions in CFD (Next Action)**
 
 | Run # | Geometry | Platform | Why |
 | :---: | :--- | :--- | :--- |
-| 7 | Re-optimized Fastback Champion v2 | **Local / Camber / GCP** | Validate correction for Fastback |
-| 8 | Re-optimized Estateback Champion v2 | **Local / Camber / GCP** | Validate correction for Estateback |
-| 9 | Re-optimized Notchback Champion v2 | **Local / Camber / GCP** | Validate correction for Notchback |
-| 10 | *(Optional)* Interpolated latent geometry | **Local / Camber / GCP** | Test generalization of correction |
+| 7 | Re-optimized Fastback Champion v2 (`optimization_output_v2/F_S_WWC_WM_101`) | **GCP / Local** | Validate real drag reduction vs baseline ($0.5712\text{ m}^2$) |
+| 8 | Re-optimized Estateback Champion v2 (`optimization_output_v2/E_S_WWC_WM_014`) | **GCP / Local** | Validate real drag reduction for Estateback |
+| 9 | Re-optimized Notchback Champion v2 (`optimization_output_v2/N_S_WWC_WM_025`) | **GCP / Local** | Validate real drag reduction for Notchback |
 
 **Deliverables:**
-- Corrected surrogate parameters ($\alpha$, $\beta$) with residual error
-- Comparison: v1 champions vs v2 champions ($C_dA$ improvement after correction)
-- Updated error statistics
+- Verified v2 champion CFD drag values
+- Comparison: baseline vs v1 champions (adversarial) vs v2 champions (constrained)
+- Updated Evidence Store (`metadata/cfd_evidence_store.json`)
 
 **Timeline:** ~1 week (local overnight) or **1–2 days** (cloud batch)
 

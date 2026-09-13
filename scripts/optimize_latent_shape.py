@@ -15,6 +15,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.models.triplane import TriplaneVAE
 from src.models.latent_regressor import LatentDragRegressor
 from src.dataset import VehiclePointCloudDataset
+from src.cfd_evidence_store import CFDEvidenceStore
+from src.surrogate_correction import ClosedLoopSurrogate
 
 def extract_mesh(vae, z, output_path, device, grid_res=64, threshold=0.5, c_emb=None):
     # Generates dense grid coordinates
@@ -212,8 +214,30 @@ def optimize(args):
     z_opt = torch.nn.Parameter(z_initial.clone())
     optimizer = torch.optim.Adam([z_opt], lr=args.lr)
     
-    out_dir = args.out_dir if args.out_dir else (f"optimization_output/{baseline_id}" if args.car_id else "optimization_output")
+    version_dir = f"optimization_output_{args.version}" if args.version != "v1" else "optimization_output"
+    out_dir = args.out_dir if args.out_dir else (f"{version_dir}/{baseline_id}" if args.car_id else version_dir)
     os.makedirs(out_dir, exist_ok=True)
+    
+    # Check Phase 8 Closed-Loop CFD feedback
+    body_map = {'F': 'Fastback', 'E': 'Estateback', 'N': 'Notchback'}
+    body_name = body_map.get(str(row.get('body_type', 'F')), 'Fastback')
+    use_cfd = args.use_cfd_feedback or (args.version == "v3")
+    
+    if use_cfd:
+        store = CFDEvidenceStore(args.evidence_store)
+        filter_car_id = None if args.cross_vehicle_cfd else baseline_id
+        constraints = store.get_directional_constraints(body_name, baseline_id=filter_car_id)
+        print(f"\n[Phase 8 Closed-Loop Mode]")
+        print(f"Loaded {len(constraints)} active directional CFD constraint(s) for {body_name} (baseline: {filter_car_id}).")
+        closed_loop_model = ClosedLoopSurrogate(
+            base_regressor=regressor,
+            z_initial=z_initial,
+            class_idx=class_idx,
+            cfd_constraints=constraints,
+            cfd_penalty_weight=args.cfd_penalty_weight
+        )
+    else:
+        closed_loop_model = None
     
     # Export step 0 (baseline)
     print(f"Exporting initial mesh (Step 0) to {out_dir}...")
@@ -224,26 +248,48 @@ def optimize(args):
     drag_floor_tensor = torch.tensor(drag_floor, dtype=torch.float32, device=device)
     
     print("\nStarting Latent Space Optimization...")
+    print(f"Explicit Latent Trust Region: R_trust = {args.trust_radius if args.trust_radius else 'None (unconstrained)'}")
+    if closed_loop_model is not None:
+        print("Objective: Relative Delta CdA + Directional CFD Repulsive Barrier")
+    else:
+        print("Objective: Absolute Surrogate CdA Minimization")
+        
     for step in range(1, args.steps + 1):
         optimizer.zero_grad()
         
-        pred_drag = regressor(z_opt, class_idx=class_idx)
+        if closed_loop_model is not None:
+            drag_loss = closed_loop_model(z_opt)
+            pred_drag = regressor(z_opt, class_idx=class_idx)
+        else:
+            pred_drag = regressor(z_opt, class_idx=class_idx)
+            pred_drag_clamped = torch.clamp(pred_drag, min=drag_floor_tensor)
+            drag_loss = pred_drag_clamped
+            
         similarity_penalty = torch.sum((z_opt - z_initial) ** 2)  # Squared L2
         
-        # Clamp predicted drag to dataset floor — stops gradients below trusted range
-        pred_drag_clamped = torch.clamp(pred_drag, min=drag_floor_tensor)
-        
-        # Loss formula: drag minimization + quadratic proximity penalty
-        loss = pred_drag_clamped + args.lambda_reg * similarity_penalty
+        # Total loss formula: drag objective + proximity penalty
+        loss = drag_loss + args.lambda_reg * similarity_penalty
         loss.backward()
         optimizer.step()
         
-        # Clamp latent vector to stay within the training manifold
+        # 1. Explicit Latent Trust Region: Project onto hard L2 ball B(z_initial, trust_radius)
+        if args.trust_radius is not None and args.trust_radius > 0:
+            with torch.no_grad():
+                delta = z_opt.data - z_initial
+                dist = torch.norm(delta)
+                if dist > args.trust_radius:
+                    z_opt.data.copy_(z_initial + delta * (args.trust_radius / dist))
+                    
+        # 2. Coordinate-wise clamp to preserve latent manifold bounds
         with torch.no_grad():
             z_opt.data.clamp_(-args.z_clamp, args.z_clamp)
+            
+        latent_dist = torch.norm(z_opt.data - z_initial).item()
         
         if step % 10 == 0 or step == 1:
-            print(f"Step {step:03d} | Loss: {loss.item():.4f} | Drag: {pred_drag.item():.4f} m^2 | Penalty: {similarity_penalty.item():.4f}")
+            trust_str = f"{args.trust_radius:.2f}" if args.trust_radius is not None else "inf"
+            delta_val = pred_drag.item() - initial_pred_drag
+            print(f"Step {step:03d} | Loss: {loss.item():.4f} | Drag: {pred_drag.item():.4f} m^2 (Delta: {delta_val:+.4f}) | Dist: {latent_dist:.4f}/{trust_str} | Penalty: {similarity_penalty.item():.4f}")
             
         if step % 50 == 0 or step == args.steps:
             output_path = f"{out_dir}/optimized_car_step_{step}.stl"
@@ -260,10 +306,16 @@ def optimize(args):
     print("\nOptimization Complete!")
     print(f"Final Predicted Drag Area: {final_pred_drag:.4f} m^2 (Baseline: {initial_pred_drag:.4f} m^2)")
     print(f"Theoretical Drag Reduction: {reduction:.2f}%")
+    print(f"Final Latent Distance from Baseline: {latent_dist:.4f} (Trust Radius: {args.trust_radius})")
+    
+    if args.max_reduction_guardrail is not None and reduction > args.max_reduction_guardrail:
+        print(f"[Warning] Predicted reduction of {reduction:.2f}% exceeds the {args.max_reduction_guardrail:.1f}% engineering guardrail!")
+        
     print(f"Check the '{out_dir}' folder for STL files.")
     
     # Save optimization summary for downstream tools (e.g., visualizer)
     summary = {
+        "version": args.version,
         "baseline_id": baseline_id,
         "baseline_body_type": str(row.get('body_type', 'unknown')),
         "baseline_ground_truth_drag_area": float(row['drag_area']),
@@ -272,9 +324,18 @@ def optimize(args):
         "reduction_percent": float(reduction),
         "steps": args.steps,
         "lambda_reg": args.lambda_reg,
+        "trust_radius": float(args.trust_radius) if args.trust_radius is not None else None,
+        "cfd_feedback_enabled": bool(closed_loop_model is not None),
+        "cfd_constraints_count": len(closed_loop_model.constraint_directions) if closed_loop_model is not None else 0,
+        "final_latent_distance": float(torch.norm(z_opt - z_initial).item()),
+        "final_latent_norm": float(torch.norm(z_opt).item()),
         "lr": args.lr,
         "z_clamp": args.z_clamp,
     }
+    # Save latent tensors for evidence tracking
+    torch.save(z_initial.cpu(), f"{out_dir}/z_initial.pt")
+    torch.save(z_opt.data.cpu(), f"{out_dir}/z_opt_{args.steps}.pt")
+    
     summary_path = f"{out_dir}/optimization_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
@@ -284,11 +345,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--car_id", type=str, default=None, help="ID of baseline car to optimize (e.g. E_S_WWC_WM_014)")
     parser.add_argument("--out_dir", type=str, default=None, help="Directory to save output meshes and summary")
+    parser.add_argument("--version", type=str, default="v3", help="Optimization version tag (v1, v2, v3)")
+    parser.add_argument("--use_cfd_feedback", action="store_true", help="Enable Phase 8 active CFD directional feedback constraints")
+    parser.add_argument("--cross_vehicle_cfd", action="store_true", help="Allow cross-vehicle CFD constraints within the same body category")
+    parser.add_argument("--evidence_store", type=str, default=None, help="Path to cfd_evidence_store.json (default: metadata/cfd_evidence_store.json)")
+    parser.add_argument("--cfd_penalty_weight", type=float, default=1.5, help="Weight for directional CFD constraint repulsive barrier (default: 1.5)")
     parser.add_argument("--steps", type=int, default=250, help="Number of optimization steps")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate for Adam optimizer")
     parser.add_argument("--lambda_reg", type=float, default=0.01, help="Squared-L2 penalty weight to preserve core structure")
+    parser.add_argument("--trust_radius", type=float, default=0.75, help="Explicit hard trust region radius in latent space around baseline (default: 0.75)")
+    parser.add_argument("--max_reduction_guardrail", type=float, default=15.0, help="Engineering guardrail threshold in percent (default: 15.0)")
     parser.add_argument("--vae_path", type=str, default="models/triplane_vae_best_128.pth", help="Path to pre-trained VAE weights")
-    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best__128.pth", help="Path to trained regressor weights")
+    parser.add_argument("--regressor_path", type=str, default="models/latent_regressor_best_128.pth", help="Path to trained regressor weights")
     parser.add_argument("--plane_res", type=int, default=128, help="Triplane resolution of VAE")
     parser.add_argument("--grid_res", type=int, default=64, help="Marching Cubes grid resolution for mesh extraction")
     parser.add_argument("--pc_dir", type=str, default="pointclouds_hybrid", help="Directory containing point clouds")

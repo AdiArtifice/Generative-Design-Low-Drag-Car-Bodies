@@ -1,0 +1,12 @@
+{
+    "mean_drag_force_N": 397.5483619047619,
+    "std_drag_force_N": 5.671263403500324,
+    "cda_m2": 0.7211761667206565,
+    "velocity_mps": 30.0,
+    "density_kg_m3": 1.225,
+    "averaging_start_iteration": 2800,
+    "averaging_end_iteration": 3000,
+    "samples": 21,
+    "model_tag": "AI_Fastback_v2_Step0_Baseline_Reconstruction",
+    "stl_source": "/home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main Project Folder/optimization_output_v2/F_S_WWC_WM_101/optimized_car_step_0_1to1_scale.stl"
+}

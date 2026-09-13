@@ -720,6 +720,10 @@ The following actions have now been completed:
 2. Built `scripts/openfoam_runner.py` as the Python execution bridge outside the encrypted FUSE mount.
 3. Built `scripts/denormalize_mesh.py` to rescale AI unit-box STLs to 1:1 physical dimensions.
 4. GCP Compute Engine (`c2-standard-8`) benchmarked and promoted to Primary MVP Backend (100.000% numerical parity, 56.6 min runtime, guaranteed automated teardown).
+5. Stage 1 CFD Validation completed for all 6 vehicle cases (3 baselines + 3 v1 AI champions), populating `metadata/cfd_evidence_store.json`.
+6. Deep CFD Baseline Audit completed: identified `blockMesh` mapping bug, severe domain blockage (11.25%), short wake space (1.35L), and near-wall $y^+ \sim 380$.
+7. CFD Case Rectification completed: boundary mapping fixed, domain expanded to $15\text{ m} \times 7.5\text{ m}$ (blockage 2.31%), and 3-layer prism meshing extruded, reducing Fastback $C_dA$ from $0.804\text{ m}^2$ to $0.5712\text{ m}^2$ and resolving over 75% of the initial discrepancy vs DrivAerNet++.
+8. Stage 2 Explicit Latent Trust Region ($\|z - z_0\|_2 \le 0.75$) implemented in `scripts/optimize_latent_shape.py` and executed to produce v2 AI champions for Fastback, Estateback, and Notchback.
 
 ---
 

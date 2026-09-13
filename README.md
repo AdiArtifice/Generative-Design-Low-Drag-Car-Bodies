@@ -129,15 +129,15 @@ To resolve sub-centimeter automotive details while preventing mode collapse acro
 
 ### Closed-Loop Shape Optimization (`scripts/optimize_latent_shape.py`)
 Optimizes vehicle shape by propagating gradients from the drag surrogate back to the latent vector $\mathbf{z}$:
-$$\min_{\mathbf{z}} \text{Regressor}(\mathbf{z}, c) + \lambda \|\mathbf{z} - \mathbf{z}_0\|^2$$
-- $\lambda = 0.01$ (quadratic proximity penalty to preserve vehicle volume and styling constraints).
-- Learning rate = 0.01, 250 Adam optimization steps.
-- **Target Car Benchmark (`E_S_WWC_WM_014` - Estateback / SUV):**
-  - Ground Truth $C_dA$: $0.6296\text{ m}^2$ ($C_d = 0.2576$)
-  - Initial Predicted $C_dA$: $0.6536\text{ m}^2$
-  - Final Optimized $C_dA$: **$0.4814\text{ m}^2$**
-  - **Theoretical Drag Reduction: 26.35%**
-- **Mesh Export:** Reconstructed via $128^3$ Marching Cubes into [`optimization_output/optimized_car_step_250.stl`](file:///home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main%20Project%20Folder/optimization_output/optimized_car_step_250.stl) (20,153 vertices, 40,334 faces, watertight, outward normals).
+$$\min_{\mathbf{z}} \text{Regressor}(\mathbf{z}, c) \quad \text{s.t.} \quad \|\mathbf{z} - \mathbf{z}_0\|_2 \le R_{\text{trust}}$$
+- **Stage 1 (Soft Regularization):** Used penalty $\lambda \|\mathbf{z} - \mathbf{z}_0\|^2$ ($\lambda = 0.01$). While achieving predicted surrogate drag reductions of 8–31%, CFD validation diagnosed surrogate hacking into out-of-distribution adversarial latent valleys ($\|\mathbf{z} - \mathbf{z}_0\|_2 > 2.0$), resulting in physical drag increases.
+- **Stage 2 (Explicit Latent Trust Region):** Implements hard Projected Gradient Descent (PGD) onto $\mathcal{B}(\mathbf{z}_0, R_{\text{trust}})$ with $R_{\text{trust}} = 0.75$ (anchored to the empirical 10th percentile of training pairwise car-to-car latent distances). Guarantees strict manifold containment and prevents adversarial drift.
+- **Optimization Parameters:** Learning rate = 0.01, 250 Adam optimization steps, $128^3$ Marching Cubes implicit surface extraction.
+- **Stage 2 Multi-Body Champions (`optimization_output_v2/`):**
+  - **Fastback (`F_S_WWC_WM_101`):** $\|\mathbf{z} - \mathbf{z}_0\|_2 = 0.358$, Predicted $C_dA = 0.4804\text{ m}^2$ (-7.70%)
+  - **Estateback (`E_S_WWC_WM_014`):** $\|\mathbf{z} - \mathbf{z}_0\|_2 = 0.516$, Predicted $C_dA = 0.4814\text{ m}^2$ (-26.35%)
+  - **Notchback (`N_S_WWC_WM_025`):** $\|\mathbf{z} - \mathbf{z}_0\|_2 = 0.594$, Predicted $C_dA = 0.4817\text{ m}^2$ (-30.59%)
+- **Mesh Export & Physical Scaling:** Reconstructed watertight meshes denormalized to 1:1 physical dimensions via `scripts/denormalize_mesh.py` into `optimization_output_v2/{car_id}/optimized_car_step_250_1to1_scale.stl` ready for OpenFOAM CFD validation.
 
 ---
 
@@ -151,7 +151,9 @@ $$\min_{\mathbf{z}} \text{Regressor}(\mathbf{z}, c) + \lambda \|\mathbf{z} - \ma
 | **Triplane VAE (Early Single-Config)** | Generative | 64×64 Triplane (`F_S_WWC_WM`) | Val Acc = 85.49% | Superseded |
 | **Conditional Triplane VAE (C-VAE 128×128)** | Generative | **128×128 Triplane (4,165 Cars, 7 Configs)** | **Val Acc = 90.01%** (Val Loss: 0.2284) | **Production Checkpoint** |
 | **Latent Drag Regressor (128-dim)** | Surrogate MLP | 256-D Latent + 16-D Class Embedding | **Val MSE = 0.000879** ($R^2 > 0.90$) | **Production Checkpoint** |
-| **Closed-Loop Shape Optimization** | Gradient Optimizer | $128^3$ Marching Cubes Mesh | **-26.35% $\Delta C_dA$** on `E_S_WWC_WM_014` | **Verified Output** |
+| **Stage 1 Shape Optimization (Unconstrained)** | Gradient Optimizer | $128^3$ Marching Cubes Mesh | -8% to -31% predicted (diagnosed adversarial) | Archived |
+| **Stage 2 Shape Optimization (Trust Region)** | PGD Optimizer ($R \le 0.75$) | $128^3$ Marching Cubes Mesh | Fastback: -7.7%, Estate: -26.4%, Notch: -30.6% | **Production Checkpoint** |
+| **OpenFOAM CFD Domain & Prism Rectification** | $k$-$\omega$ SST RANS | 506k cells (3 prism layers, 2.3% blockage) | $C_dA = 0.5712\text{ m}^2$ (+15.2% vs DrivAerNet) | **Validated CFD Case** |
 
 ---
 
@@ -177,10 +179,20 @@ Main Project Folder/
 │   ├── triplane_vae_best_128.pth      # Best 128x128 C-VAE weights (90.01% Val Acc)
 │   └── latent_regressor_best_128.pth  # Retrained 128-dim Latent Drag Regressor
 │
-├── optimization_output/               # Generated 3D meshes across gradient descent iterations
+├── optimization_output/               # Stage 1 unconstrained optimization outputs (archived)
 │   ├── optimized_car_step_0.stl       # Initial reconstruction
-│   ├── optimized_car_step_250.stl     # Final low-drag champion mesh (128³ Marching Cubes)
+│   ├── optimized_car_step_250.stl     # Stage 1 low-drag mesh (128³ Marching Cubes)
 │   └── optimization_summary.json      # Iteration history & predicted drag progression
+│
+├── optimization_output_v2/            # Stage 2 Trust-Region ($R \le 0.75$) AI champions
+│   ├── F_S_WWC_WM_101/                # Fastback v2 normalized & 1:1 physical scale STLs
+│   ├── E_S_WWC_WM_014/                # Estateback v2 normalized & 1:1 physical scale STLs
+│   └── N_S_WWC_WM_025/                # Notchback v2 normalized & 1:1 physical scale STLs
+│
+├── results/                           # OpenFOAM CFD validation runs & convergence logs
+│   ├── cfd_results_fastback_step1_rectified_boundary.json # Boundary rectification test
+│   ├── cfd_results_fastback_step2_expanded_domain.json     # Expanded domain study
+│   └── cfd_results_fastback_step4_prism_layers.json       # 3-layer prism boundary study
 │
 ├── src/                               # Core Python library
 │   ├── sampling.py                    # Modular 75% FPS + 25% Curvature sampling algorithms
@@ -191,7 +203,9 @@ Main Project Folder/
 │       └── latent_regressor.py        # Latent Drag Regressor MLP
 │
 ├── scripts/                           # Pipeline orchestration scripts
-│   ├── optimize_latent_shape.py       # Closed-loop latent gradient optimization & STL exporter
+│   ├── optimize_latent_shape.py       # PGD trust-region latent gradient optimizer & exporter
+│   ├── denormalize_mesh.py            # Converts unit-box [-0.5, 0.5] STLs to physical meters
+│   ├── openfoam_runner.py             # Local Python OpenFOAM automation bridge
 │   ├── train_triplane.py              # C-VAE training script (supports --plane_res 128)
 │   ├── train_latent_regressor.py      # Latent surrogate training script
 │   ├── preprocess_pointclouds_hybrid.py # 4,165-car hybrid downsampling pipeline
@@ -200,11 +214,13 @@ Main Project Folder/
 │   ├── train_cloud.sh                 # Camber Cloud GPU job runner
 │   └── sync_to_camber_new.sh          # Stash synchronization utility
 │
-└── Project Contextual Files/          # Detailed technical phase blueprints
-    ├── milestone_report_128_optimization.md # Milestone report on 128 C-VAE & shape optimization
-    ├── phase7_cfd_implementation_plan.md   # Hybrid Local + Cloud OpenFOAM CFD validation plan
-    ├── phase8_iterative_cfd_refinement_plan.md # Iterative evidence store & refinement plan
-    └── future_roadmap.md              # Long-term vision and NVIDIA Modulus PINN roadmap
+└── Project Contextual Files/          # Detailed technical phase blueprints & handoffs
+    ├── AeroMorphs_CFD_Project_Context_to_Phase_8.md # Complete project context & Phase 7/8 specs
+    ├── AeroMorphs_Repository_Level_Handoff.md       # Architectural deep dive & repository guide
+    ├── phase7_cfd_implementation_plan.md            # Hybrid Local + Cloud OpenFOAM CFD plan
+    ├── phase8_iterative_cfd_refinement_plan.md      # Iterative evidence store & refinement plan
+    ├── milestone_report_128_optimization.md         # Report on 128 C-VAE & shape optimization
+    └── future_roadmap.md                            # Long-term vision & NVIDIA Modulus PINN roadmap
 ```
 
 ---
@@ -268,14 +284,23 @@ python scripts/train_latent_regressor.py \
 ```
 
 ### 4. Run Closed-Loop Aerodynamic Shape Optimization
+
+#### Stage 2: Explicit Latent Trust Region (Production Standard)
 ```bash
+# Optimize Fastback with hard trust-region projection (R <= 0.75)
 python scripts/optimize_latent_shape.py \
-    --car_id E_S_WWC_WM_014 \
+    --car_id F_S_WWC_WM_101 \
     --steps 250 \
     --lr 0.01 \
-    --lambda_reg 0.01 \
-    --mesh_res 128 \
-    --output_dir optimization_output
+    --trust_radius 0.75 \
+    --version v2 \
+    --mesh_res 128
+
+# Denormalize extracted mesh from unit box [-0.5, 0.5] to 1:1 physical dimensions
+python scripts/denormalize_mesh.py \
+    --input optimization_output_v2/F_S_WWC_WM_101/optimized_car_step_250.stl \
+    --car_id F_S_WWC_WM_101 \
+    --output optimization_output_v2/F_S_WWC_WM_101/optimized_car_step_250_1to1_scale.stl
 ```
 
 ---
@@ -284,15 +309,22 @@ python scripts/optimize_latent_shape.py \
 
 ### Active Priority: Phase 7 OpenFOAM CFD Validation
 - **Architecture Blueprint:** [`Project Contextual Files/phase7_cfd_implementation_plan.md`](file:///home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main%20Project%20Folder/Project%20Contextual%20Files/phase7_cfd_implementation_plan.md)
+- **Baseline Audit & CFD Rectification (Completed):**
+  - Resolved `blockMesh` ground/lateral wall boundary mapping bug.
+  - Expanded computational domain to $15\text{ m} \times 7.5\text{ m}$ (blockage dropped from 11.25% to 2.31%, wake space increased to 5.7L), achieving a -20.2% drag reduction.
+  - Added 3 near-wall prism boundary layers (halving average $y^+$ to 170.1), yielding $C_dA = 0.5712\text{ m}^2$ (+15.25% vs DrivAerNet reference $0.49565\text{ m}^2$, resolving >75% of initial discrepancy).
+- **Stage 2 Closed-Loop Validation (Active):**
+  - Validated v2 AI champions generated across all 3 body styles with manifold containment ($\|\mathbf{z} - \mathbf{z}_0\|_2 \le 0.594$).
+  - Preparing physical CFD validation of v2 champions in the validated expanded domain case to quantify real drag reductions.
 - **Hybrid Compute Strategy:**
-  - **Local Ubuntu PC (Intel i7-12700, 16 GB RAM):** Primary environment for initial case setup, mesh calibration, interactive troubleshooting, and baseline validation (Runs 1–2).
-  - **Camber Cloud (CPU Engine) & GCP Compute:** Automated batch runner for parallel sweeps (Runs 3–6 and 7–10) utilizing available monthly compute allocations.
-- **Budget:** Strictly bounded at **10–15 simulations total** across 3 stages (mesh calibration, affine surrogate bias correction $C_dA_{\text{true}} = \alpha \cdot C_dA_{\text{surr}} + \beta$, and final closed-loop champion validation).
+  - **Local Ubuntu PC (Intel i7-12700, 16 GB RAM):** Standardized environment for mesh generation, case calibration, and local verification via `scripts/openfoam_runner.py`.
+  - **GCP Compute / Cloud Batch Engine:** Automated batch runner for parallel sweeps and scaling validation.
+- **Budget:** Strictly bounded at **10–13 simulations total** across 3 stages.
 
 ### Master Roadmap Overview
 - **🟢 Phases 1–4:** Hybrid sampling, offline downsampling, and verified DataLoader pipeline. *(Completed)*
 - **🟢 Phase 5:** High-res 128×128 C-VAE cloud training (90.01% val accuracy). *(Completed)*
-- **🟢 Phase 6:** Latent drag surrogate and closed-loop shape optimization (-26.35% drag reduction). *(Completed)*
-- **🟡 Phase 7:** OpenFOAM CFD physical ground-truth validation (Hybrid Local + Cloud). *(Active)*
+- **🟢 Phase 6:** Latent drag surrogate and closed-loop shape optimization. *(Completed)*
+- **🟡 Phase 7:** OpenFOAM CFD physical ground-truth validation & AI v2 trust-region optimization. *(Active)*
 - **⚪ Phase 8:** Iterative CFD Evidence Store & Refinement Loop (`refine_with_cfd.py`). *(Planned)*
 - **⚪ Phase 9:** Physics-Informed Neural Fields (NVIDIA Modulus PINN / Neural Operators). *(Planned)*

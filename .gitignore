@@ -38,4 +38,4 @@ stash_ls.json
 scratch/
 
 # Generated Optimization Meshes
-optimization_output/
+optimization_output*/

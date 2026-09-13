@@ -2425,22 +2425,22 @@ They define the intended future architecture, compute strategy, correction model
 
 ```text
 OpenFOAM 2412                 WORKING
-Notchback baseline            WORKING
-Automation pipeline           WORKING
-3000-iteration medium run    COMPLETE (414,139 cells, CdA = 1.0929 m²)
-3000-iteration coarse run    COMPLETE (152,209 cells, CdA = 1.1604 m²)
-3000-iteration fine run      COMPLETE (1,151,572 cells, CdA = 1.0733 m²)
-Mesh sensitivity / study     COMPLETE (Asymptotic convergence: 1.80% delta; Medium frozen)
-Different STL test           COMPLETE (Estateback E_S_WWC_WM_014, CdA = 0.9186 m²)
-AI STL 1:1 Scale Fix         COMPLETE (scripts/denormalize_mesh.py implemented)
-First AI Champion Validation COMPLETE (step_250_1to1_scale: predicted 0.4814 vs CFD 1.0873 m²)
-GCP Backend Parity Benchmark COMPLETE (c2-standard-8: exact 0.000% parity, 56.6 min, auto-cleanup)
-GCP Compute Engine Role      PROMOTED TO PRIMARY MVP BACKEND
-Absolute CdA calibration     READY (Stage 1 Affine Model fitting next)
-Phase 7 full validation      IN PROGRESS (Stage 1 calibration batch)
-Phase 8 implementation       PENDING (Awaiting Stage 1 affine parameters)
+Stage 1 Calibration Runs      COMPLETE (All 6 CFD runs: 3 baselines + 3 v1 AI champions)
+CFD Evidence Store            INITIALIZED (metadata/cfd_evidence_store.json)
+Surrogate Hacking Diagnosis   VERIFIED (v1 champions increased drag +18% to +25%)
+CFD Baseline Discrepancy Audit COMPLETE (Blockage 11.25%, boundary bug, y+ ~380 identified)
+CFD Case Rectification:
+  • Boundary mapping fix      COMPLETE (Ground Z=0 moving at 30 m/s, sides/ceiling slip)
+  • Domain Expansion (2.31%)  COMPLETE (15m x 7.5m cross-section, CdA: 0.804 -> 0.642 m²)
+  • Near-Wall Prism Layers    COMPLETE (3 layers, 506k cells, y+ halved to 170, CdA: 0.5712 m²)
+  • Discrepancy vs DrivAerNet RESOLVED (Initial +61.5% delta dropped to +15.25%)
+Stage 2 Explicit Trust Region COMPLETE (scripts/optimize_latent_shape.py: R_trust=0.75)
+Stage 2 AI Optimization (v2)  COMPLETE (All 3 body types generated: Fastback, Estate, Notchback)
+Physical 1:1 Scale Denorm     COMPLETE (All 3 v2 champions scaled and ready)
+Phase 7 v2 CFD Validation     READY (Next operational step)
+Phase 8 implementation        PENDING (Awaiting v2 CFD evidence)
 ```
 
 The validated next operational step is:
 
-> **Execute the Phase 7 Stage 1 calibration batch on GCP Compute Engine to populate the Evidence Store, compute the Affine Correction parameters ($\alpha, \beta$), and re-optimize the AI surrogate.**
+> **Execute OpenFOAM CFD validation runs on the v2 AI champion geometries using the validated expanded-domain case to measure real physical drag reduction vs baselines.**

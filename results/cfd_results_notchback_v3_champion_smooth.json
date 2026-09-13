@@ -1,0 +1,12 @@
+{
+    "mean_drag_force_N": 462.5005571428571,
+    "std_drag_force_N": 10.900448045687602,
+    "cda_m2": 0.8390032782636863,
+    "velocity_mps": 30.0,
+    "density_kg_m3": 1.225,
+    "averaging_start_iteration": 2800,
+    "averaging_end_iteration": 3000,
+    "samples": 21,
+    "model_tag": "AI_Notchback_v3_Champion_Smooth",
+    "stl_source": "/home/student/.local/share/Cryptomator/mnt/AeroDyNaS/Main Project Folder/optimization_output_v3/N_S_WWC_WM_025/optimized_car_step_250_1to1_smooth.stl"
+}
