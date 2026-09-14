@@ -1,0 +1,39 @@
+{
+  "benchmark_geometry": "N_S_WWC_WM_025",
+  "mesh_cells": 414139,
+  "iterations": 3000,
+  "averaging_window": "2800-3000 (21 samples)",
+  "timestamp": "2026-09-14T12:22:53Z",
+  "fresh_runs": {
+    "1core_serial": {
+      "mean_drag_N": 599.3706,
+      "cda_m2": 1.08729,
+      "std_drag_N": 17.0389,
+      "solver_time_sec": 3315,
+      "solver_time_min": 55.25,
+      "total_vm_min": 59.49,
+      "cpu_utilization_pct": 100.0,
+      "cost_usd": 0.327
+    },
+    "4core_mpi": {
+      "mean_drag_N": 603.1915,
+      "cda_m2": 1.09422,
+      "std_drag_N": 19.9693,
+      "solver_time_sec": 879,
+      "solver_time_min": 14.65,
+      "total_vm_min": 18.82,
+      "cpu_utilization_pct": 99.84,
+      "cost_usd": 0.104,
+      "solver_speedup": 3.77,
+      "solver_efficiency_pct": 94.3,
+      "delta_vs_1core_pct": 0.64
+    }
+  },
+  "reproducibility_assessment": {
+    "prior_delta_pct": 2.14,
+    "repeat_delta_pct": 0.64,
+    "delta_difference_pct": 1.503,
+    "is_reproducible": false,
+    "conclusion": "MPI variation differed from prior run."
+  }
+}

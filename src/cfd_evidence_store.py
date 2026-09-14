@@ -102,3 +102,109 @@ class CFDEvidenceStore:
                             "z_opt": z1
                         })
         return constraints
+
+    def get_baseline_entry(self, baseline_id: str) -> Optional[Dict[str, Any]]:
+        """Find baseline entry for a given vehicle id."""
+        for entry in self.data.get("entries", []):
+            cat = entry.get("category", "")
+            if "Baseline" in cat:
+                if entry.get("baseline_id") == baseline_id or entry.get("id") == baseline_id:
+                    return entry
+        return None
+
+    def record_run(
+        self,
+        run_id: str,
+        category: str,
+        body_type: str,
+        baseline_id: str,
+        cfd_results: Dict[str, Any],
+        opt_summary: Optional[Dict[str, Any]] = None,
+        z_initial_path: Optional[str] = None,
+        z_opt_path: Optional[str] = None,
+        round_num: Optional[int] = None,
+        notes: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Automated ingestion of a CFD run result into the evidence store.
+        Calculates discrepancies, deltas against baseline, and updates persistent JSON.
+        """
+        cfd_cda = cfd_results.get("cda_m2") if cfd_results.get("cda_m2") is not None else cfd_results.get("cfd_cda")
+        cfd_force = cfd_results.get("mean_drag_force_N") if cfd_results.get("mean_drag_force_N") is not None else cfd_results.get("cfd_drag_force_N")
+        cfd_std = cfd_results.get("std_drag_force_N") if cfd_results.get("std_drag_force_N") is not None else cfd_results.get("cfd_std_N")
+        cells = cfd_results.get("cells") or cfd_results.get("mesh_cells")
+
+        baseline_entry = self.get_baseline_entry(baseline_id)
+        delta_cda_cfd = None
+        delta_drag_force_N = None
+        real_drag_change_pct = None
+
+        if baseline_entry:
+            base_cda = baseline_entry.get("cfd_cda")
+            base_force = baseline_entry.get("cfd_drag_force_N")
+            if cfd_cda is not None and base_cda is not None:
+                delta_cda_cfd = cfd_cda - base_cda
+            if cfd_force is not None and base_force is not None:
+                delta_drag_force_N = cfd_force - base_force
+                if base_force != 0:
+                    real_drag_change_pct = (delta_drag_force_N / base_force) * 100.0
+
+        surrogate_pred_cda = None
+        delta_cda_surrogate = None
+        trust_radius = None
+
+        if opt_summary:
+            surrogate_pred_cda = opt_summary.get("final_predicted_drag_area")
+            initial_pred = opt_summary.get("baseline_predicted_drag_area")
+            if surrogate_pred_cda is not None and initial_pred is not None:
+                delta_cda_surrogate = surrogate_pred_cda - initial_pred
+            trust_radius = opt_summary.get("trust_radius")
+            if not z_initial_path:
+                z_initial_path = opt_summary.get("z_initial_path")
+            if not z_opt_path:
+                z_opt_path = opt_summary.get("z_opt_path")
+
+        entry: Dict[str, Any] = {
+            "id": run_id,
+            "category": category,
+            "body_type": body_type,
+            "baseline_id": baseline_id,
+        }
+        if round_num is not None:
+            entry["round"] = round_num
+        if surrogate_pred_cda is not None:
+            entry["surrogate_pred_cda"] = round(float(surrogate_pred_cda), 5)
+        if delta_cda_surrogate is not None:
+            entry["delta_cda_surrogate"] = round(float(delta_cda_surrogate), 5)
+        if cfd_force is not None:
+            entry["cfd_drag_force_N"] = round(float(cfd_force), 4)
+        if cfd_cda is not None:
+            entry["cfd_cda"] = round(float(cfd_cda), 5)
+        if delta_cda_cfd is not None:
+            entry["delta_cda_cfd"] = round(float(delta_cda_cfd), 5)
+        if delta_drag_force_N is not None:
+            entry["delta_drag_force_N"] = round(float(delta_drag_force_N), 4)
+        if real_drag_change_pct is not None:
+            entry["real_drag_change_vs_baseline_pct"] = round(float(real_drag_change_pct), 2)
+        if cfd_std is not None:
+            entry["cfd_std_N"] = round(float(cfd_std), 4)
+        if cells is not None:
+            entry["cells"] = int(cells)
+        if z_initial_path:
+            entry["z_initial_path"] = str(Path(z_initial_path).resolve())
+        if z_opt_path:
+            entry["z_opt_path"] = str(Path(z_opt_path).resolve())
+        if trust_radius is not None:
+            entry["trust_radius"] = float(trust_radius)
+        if notes:
+            entry["notes"] = notes
+
+        self.add_entry(entry)
+        
+        disc_str = ""
+        if delta_cda_cfd is not None and delta_cda_surrogate is not None:
+            discrepancy = delta_cda_cfd - delta_cda_surrogate
+            disc_str = f" | Discrepancy: {discrepancy:+.4f} m^2 ({'FALSIFIED (barrier active)' if discrepancy > 0 else 'VERIFIED'})"
+        print(f"[EvidenceStore] Recorded entry '{run_id}' (CFD CdA: {cfd_cda:.4f} m^2{disc_str})")
+        return entry
+

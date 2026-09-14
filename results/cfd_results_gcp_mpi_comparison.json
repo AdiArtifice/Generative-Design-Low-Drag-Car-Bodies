@@ -1,0 +1,45 @@
+{
+  "benchmark_geometry": "N_S_WWC_WM_025",
+  "iterations": 3000,
+  "mesh_cells": 414139,
+  "baseline_1core": {
+    "vm_turnaround_min": 56.63,
+    "solver_time_sec": 3240,
+    "solver_time_min": 54.0,
+    "mean_drag_N": 599.3706,
+    "cda_m2": 1.08729,
+    "std_drag_N": 17.0389,
+    "solver_speedup": 1.0,
+    "solver_efficiency_pct": 100.0,
+    "active_cores_utilization_pct": 100.0,
+    "cost_usd": 0.31
+  },
+  "mpi_4core": {
+    "vm_turnaround_min": 21.1,
+    "solver_time_sec": 881,
+    "solver_time_min": 14.68,
+    "mesh_time_sec": 74,
+    "mean_drag_N": 612.1936,
+    "cda_m2": 1.11056,
+    "delta_cda_vs_1core_pct": 2.14,
+    "std_drag_N": 19.4779,
+    "solver_speedup": 3.68,
+    "solver_efficiency_pct": 91.9,
+    "active_cores_utilization_pct": 100.0,
+    "cost_usd": 0.116
+  },
+  "mpi_8core": {
+    "vm_turnaround_min": 23.3,
+    "solver_time_sec": 797,
+    "solver_time_min": 13.28,
+    "mesh_time_sec": 75,
+    "mean_drag_N": 607.5518,
+    "cda_m2": 1.10213,
+    "delta_cda_vs_1core_pct": 1.37,
+    "std_drag_N": 34.0368,
+    "solver_speedup": 4.07,
+    "solver_efficiency_pct": 50.8,
+    "active_cores_utilization_pct": 99.97,
+    "cost_usd": 0.128
+  }
+}

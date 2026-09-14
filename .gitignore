@@ -34,6 +34,7 @@ reconstructed_test*.stl
 # Logs and temporary files
 camber-logs/
 *.log
+*.gz
 stash_ls.json
 scratch/
 

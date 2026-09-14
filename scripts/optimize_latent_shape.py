@@ -17,6 +17,7 @@ from src.models.latent_regressor import LatentDragRegressor
 from src.dataset import VehiclePointCloudDataset
 from src.cfd_evidence_store import CFDEvidenceStore
 from src.surrogate_correction import ClosedLoopSurrogate
+from scripts.denormalize_mesh import denormalize
 
 def extract_mesh(vae, z, output_path, device, grid_res=64, threshold=0.5, c_emb=None):
     # Generates dense grid coordinates
@@ -332,14 +333,60 @@ def optimize(args):
         "lr": args.lr,
         "z_clamp": args.z_clamp,
     }
+    z_init_file = os.path.abspath(f"{out_dir}/z_initial.pt")
+    z_opt_file = os.path.abspath(f"{out_dir}/z_opt_{args.steps}.pt")
+    summary["z_initial_path"] = z_init_file
+    summary["z_opt_path"] = z_opt_file
+
     # Save latent tensors for evidence tracking
-    torch.save(z_initial.cpu(), f"{out_dir}/z_initial.pt")
-    torch.save(z_opt.data.cpu(), f"{out_dir}/z_opt_{args.steps}.pt")
+    torch.save(z_initial.cpu(), z_init_file)
+    torch.save(z_opt.data.cpu(), z_opt_file)
     
     summary_path = f"{out_dir}/optimization_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"Saved optimization summary to {summary_path}")
+
+    if args.stage_cfd:
+        print("\n--- CFD Mesh Staging ---")
+        final_stl = f"{out_dir}/optimized_car_step_{args.steps}.stl"
+        step0_stl = f"{out_dir}/optimized_car_step_0.stl"
+        ref_stl = f"temp_raw_stl/{baseline_id}.stl"
+        staged_stl = f"{out_dir}/optimized_car_step_{args.steps}_1to1_smooth.stl"
+        step0_staged = f"{out_dir}/optimized_car_step_0_1to1_smooth.stl"
+        
+        if not os.path.exists(ref_stl):
+            print(f"[Error] Reference CAD {ref_stl} not found! Cannot automatically denormalize.")
+        else:
+            if os.path.exists(step0_stl) and not os.path.exists(step0_staged):
+                try:
+                    print("Denormalizing and smoothing baseline Step 0 mesh...")
+                    denormalize(
+                        input_stl=step0_stl,
+                        ref_stl=ref_stl,
+                        output_stl=step0_staged,
+                        subdivide_levels=args.subdivide,
+                        taubin_iters=args.smooth_taubin
+                    )
+                    print(f"Staged baseline step 0 mesh: {step0_staged}")
+                except Exception as e:
+                    print(f"[Warning] Baseline step 0 staging failed: {e}")
+
+            if not os.path.exists(final_stl):
+                print(f"[Error] Final mesh {final_stl} not found! Did extraction fail?")
+            else:
+                print(f"Denormalizing and smoothing AI champion mesh...")
+                try:
+                    denormalize(
+                        input_stl=final_stl,
+                        ref_stl=ref_stl,
+                        output_stl=staged_stl,
+                        subdivide_levels=args.subdivide,
+                        taubin_iters=args.smooth_taubin
+                    )
+                    print(f"Successfully staged physical CFD-ready mesh: {staged_stl}")
+                except Exception as e:
+                    print(f"[Error] Denormalization failed: {e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -364,6 +411,9 @@ if __name__ == "__main__":
     parser.add_argument("--embed_dim", type=int, default=16, help="Category embedding dimension")
     parser.add_argument("--seed", type=int, default=42, help="Seed for reproducibility")
     parser.add_argument("--z_clamp", type=float, default=3.0, help="Clamp radius for latent vector (keeps z within training manifold)")
+    parser.add_argument("--stage_cfd", action="store_true", help="Automatically denormalize and smooth the final mesh for CFD")
+    parser.add_argument("--subdivide", type=int, default=1, help="Subdivision levels for CFD staging (default: 1)")
+    parser.add_argument("--smooth_taubin", type=int, default=4, help="Taubin smoothing iterations for CFD staging (default: 4)")
     args = parser.parse_args()
     
     optimize(args)

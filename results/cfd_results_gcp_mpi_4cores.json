@@ -1,0 +1,19 @@
+{
+  "mean_drag_force_N": 612.1936,
+  "std_drag_force_N": 19.47790520053304,
+  "cda_m2": 1.1105552834467118,
+  "velocity_mps": 30.0,
+  "density_kg_m3": 1.225,
+  "averaging_start_iteration": 2800,
+  "averaging_end_iteration": 3000,
+  "samples": 21,
+  "job_id": "notchback_mpi_4cores_1789365249",
+  "backend": "gcp_c2_standard_8_mpi_4",
+  "mpi_cores": 4,
+  "total_wall_time_seconds": 1789366516,
+  "solver_wall_time_seconds": 881,
+  "mesh_wall_time_seconds": 74,
+  "instance_type": "c2-standard-8",
+  "avg_total_cpu_utilization_pct": 50.12,
+  "active_cores_utilization_pct": 100.0
+}
